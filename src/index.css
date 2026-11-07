@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/* Dark mode is on when <html> has the "dark" class (set in index.html) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Light theme: graphite neutrals */
+:root {
+  --page: #fafafa;
+  --deep: #f4f4f5;
+  --card: #ffffff;
+  --raised: #f4f4f5;
+  --line: rgb(23 23 23 / 0.08);
+  --fg: #171717;
+  --fg-2: #525252;
+  --fg-3: #737373;
+  --inverse: #fafafa;
+  --accent: #0f766e;
+  --fall: #dc2626;
+  --fall-soft: rgb(220 38 38 / 0.06);
+  --fall-line: rgb(220 38 38 / 0.24);
+  --check: #b45309;
+  --device-hi: #ffffff;
+  --device-lo: #e7e7e9;
+  --strap-hi: #e4e4e7;
+  --strap-lo: #d4d4d8;
+}
+
+/* Dark theme: graphite neutrals, the default for night shifts */
+.dark {
+  --page: #141415;
+  --deep: #0f0f10;
+  --card: #19191b;
+  --raised: #232325;
+  --line: rgb(237 237 237 / 0.08);
+  --fg: #ededed;
+  --fg-2: #a1a1a6;
+  --fg-3: #85858b;
+  --inverse: #141415;
+  --accent: #4fb8a8;
+  --fall: #e5484d;
+  --fall-soft: rgb(229 72 77 / 0.1);
+  --fall-line: rgb(229 72 77 / 0.32);
+  --check: #f0a43c;
+  --device-hi: #303033;
+  --device-lo: #1a1a1c;
+  --strap-hi: #2a2a2d;
+  --strap-lo: #1c1c1e;
+}
+
+@theme inline {
+  --color-page: var(--page);
+  --color-deep: var(--deep);
+  --color-card: var(--card);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-inverse: var(--inverse);
+  --color-accent: var(--accent);
+  --color-fall: var(--fall);
+  --color-fall-soft: var(--fall-soft);
+  --color-fall-line: var(--fall-line);
+  --color-check: var(--check);
+  --font-sans: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+body {
+  @apply bg-page text-fg font-sans antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
