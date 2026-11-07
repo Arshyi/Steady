@@ -3,7 +3,7 @@ import { Logo } from '../components/Logo'
 import { AlertRow, ResidentList } from '../components/board'
 import { Wearable } from '../components/Wearable'
 import { residents, shift, byUrgency } from '../data/residents'
-import { useAlerts } from '../alerts'
+import { seedAlerts } from '../data/alerts'
 
 const measures = [
   { title: 'Movement', text: 'Tracked through the night and shown per half hour, so staff can see who has been restless.' },
@@ -18,13 +18,19 @@ const steps = [
   { title: 'The dashboard', text: 'Staff see the whole wing on one screen, with alerts for falls, checks and devices.' },
 ]
 
+/** A picture of the dashboard. `inert` stops clicks, hovers and keyboard focus inside it. */
 function DashboardPreview() {
-  const { alerts, handle, undo } = useAlerts()
-  const fall = alerts.find((a) => a.kind === 'fall')!
+  const fall = seedAlerts.find((a) => a.kind === 'fall')!
   const rows = [...residents].sort(byUrgency).filter((r) => r.status !== 'fall').slice(0, 4)
+  const noop = () => {}
 
   return (
-    <div className="rounded-[20px] border border-line bg-deep p-2 shadow-[0_8px_24px_rgb(0_0_0/0.06)]">
+    <div
+      inert
+      aria-label="Preview of the Steady dashboard"
+      role="img"
+      className="pointer-events-none select-none rounded-[20px] border border-line bg-deep p-2 shadow-[0_8px_24px_rgb(0_0_0/0.06)]"
+    >
       <div className="flex items-baseline justify-between px-3 pt-2 pb-3">
         <p className="text-sm text-fg">
           Overview <span className="text-fg-3">· {shift.wing}</span>
@@ -32,7 +38,7 @@ function DashboardPreview() {
         <p className="font-mono text-xs tabular-nums text-fg-3">{shift.updatedAt}</p>
       </div>
       <div className="flex flex-col gap-2">
-        <AlertRow alert={fall} onHandle={() => handle(fall.id)} onUndo={() => undo(fall.id)} />
+        <AlertRow alert={fall} onHandle={noop} onUndo={noop} />
         <ResidentList residents={rows} compact />
       </div>
     </div>
