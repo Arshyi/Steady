@@ -1,0 +1,12 @@
+# Build profile for the MCU half of this App Lab app.
+# App Lab writes this file when you add libraries; if your installed core differs
+# from the FQBN below, let App Lab regenerate it and keep the library list.
+default_profile: unoq
+profiles:
+  unoq:
+    fqbn: arduino:zephyr:unoq
+    platforms:
+      - platform: arduino:zephyr
+    libraries:
+      - Arduino_Modulino
+      - Arduino_RouterBridge

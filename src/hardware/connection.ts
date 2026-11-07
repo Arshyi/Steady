@@ -1,9 +1,17 @@
-// Connects to a Steady wearable over Bluetooth, USB, or a built-in simulator.
-// All three give the same events, so the Settings page doesn't care which one is used.
+// Connects to a Steady wearable over Bluetooth, USB, the network, or a built-in simulator.
+// All of them give the same events, so the Settings page doesn't care which one is used.
 
-import { STEADY_SERVICE, CHAR, CMD_IDENTIFY, SERIAL_BAUD, parseMotion, type MotionSample } from './protocol'
+import {
+  STEADY_SERVICE,
+  CHAR,
+  CMD_IDENTIFY,
+  SERIAL_BAUD,
+  parseMotion,
+  parseNetworkMessage,
+  type MotionSample,
+} from './protocol'
 
-export type Transport = 'bluetooth' | 'usb' | 'simulated'
+export type Transport = 'bluetooth' | 'usb' | 'network' | 'simulated'
 
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
@@ -22,6 +30,8 @@ export interface Connection {
 export const support = {
   bluetooth: typeof navigator !== 'undefined' && 'bluetooth' in navigator,
   usb: typeof navigator !== 'undefined' && 'serial' in navigator,
+  // The UNO Q serves WebSocket, which no browser lacks
+  network: typeof WebSocket !== 'undefined',
 }
 
 // ---------- Bluetooth ----------
@@ -142,6 +152,88 @@ function handleLine(line: string, ev: DeviceEvents) {
     case 'F':
       ev.onFall()
       break
+  }
+}
+
+// ---------- Network (Arduino UNO Q over WebSocket) ----------
+
+/**
+ * Talks to `hardware/steady_unoq`, which runs on the UNO Q's Linux side and
+ * broadcasts the MCU's samples as JSON text frames (see protocol.ts). Same
+ * events as the other transports; the board can sit anywhere on the network.
+ */
+export async function connectNetwork(url: string, ev: DeviceEvents): Promise<Connection> {
+  const socket = new WebSocket(url)
+  let finished = false
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        socket.close()
+        reject(new Error(`No answer from ${url}. Is the UNO Q app running?`))
+      }
+    }, 6000)
+
+    socket.addEventListener(
+      'open',
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true },
+    )
+    socket.addEventListener(
+      'error',
+      () => {
+        clearTimeout(timer)
+        reject(new Error(`Could not connect to ${url}. Check the board's address and that the app is running.`))
+      },
+      { once: true },
+    )
+  })
+
+  socket.addEventListener('message', (event) => {
+    if (typeof event.data !== 'string') return
+    const message = parseNetworkMessage(event.data)
+    if (!message) return
+
+    switch (message.type) {
+      case 'hello':
+        ev.onInfo(message.device ?? 'ST-?', message.firmware ?? 'unknown')
+        break
+      case 'motion':
+        ev.onMotion({
+          t: performance.now(),
+          ax: message.ax,
+          ay: message.ay,
+          az: message.az,
+          gx: message.gx,
+          gy: message.gy,
+          gz: message.gz,
+        })
+        break
+      case 'fall':
+        ev.onFall()
+        break
+      case 'error':
+        break
+    }
+  })
+
+  socket.addEventListener('close', () => {
+    if (finished) return
+    finished = true
+    ev.onDisconnect()
+  })
+
+  return {
+    transport: 'network',
+    identify: async () => socket.send(JSON.stringify({ type: 'identify' })),
+    disconnect: async () => {
+      finished = true
+      socket.close()
+      ev.onDisconnect()
+    },
   }
 }
 

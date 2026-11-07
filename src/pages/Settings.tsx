@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bluetooth, Usb, Check, Circle, Lightbulb } from 'lucide-react'
+import { Bluetooth, Usb, Check, Circle, Lightbulb, Wifi } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { residents, byRoom, secondsAgo, shift, LOW_BATTERY } from '../data/residents'
-import { connectBluetooth, connectUsb, connectSimulated, support, type Connection, type Transport } from '../hardware/connection'
-import type { MotionSample } from '../hardware/protocol'
+import {
+  connectBluetooth,
+  connectUsb,
+  connectNetwork,
+  connectSimulated,
+  support,
+  type Connection,
+  type Transport,
+} from '../hardware/connection'
+import { NETWORK_DEFAULT_URL, NETWORK_URL_KEY, type MotionSample } from '../hardware/protocol'
 import { usePairings } from '../hardware/pairings'
 
 const LATEST_FIRMWARE = '1.4.2'
@@ -14,6 +22,7 @@ const TRACE_MS = 5000
 const transportLabel: Record<Transport, string> = {
   bluetooth: 'Connected over Bluetooth',
   usb: 'Connected over USB',
+  network: 'Connected over the network',
   simulated: 'Simulated device',
 }
 
@@ -65,6 +74,14 @@ function ConnectPanel({ pairings, pair }: Pairings) {
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [residentId, setResidentId] = useState('')
+  // Remembered so the board's address only has to be typed in once
+  const [networkUrl, setNetworkUrl] = useState(() => {
+    try {
+      return localStorage.getItem(NETWORK_URL_KEY) ?? NETWORK_DEFAULT_URL
+    } catch {
+      return NETWORK_DEFAULT_URL
+    }
+  })
 
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
   const buffer = useRef<MotionSample[]>([])
@@ -105,8 +122,21 @@ function ConnectPanel({ pairings, pair }: Pairings) {
 
     try {
       const c =
-        kind === 'bluetooth' ? await connectBluetooth(events) : kind === 'usb' ? await connectUsb(events) : await connectSimulated(events)
+        kind === 'bluetooth'
+          ? await connectBluetooth(events)
+          : kind === 'usb'
+            ? await connectUsb(events)
+            : kind === 'network'
+              ? await connectNetwork(networkUrl.trim(), events)
+              : await connectSimulated(events)
       setConn(c)
+      if (kind === 'network') {
+        try {
+          localStorage.setItem(NETWORK_URL_KEY, networkUrl.trim())
+        } catch {
+          // storage blocked; the address lasts until the page reloads
+        }
+      }
     } catch (e) {
       // Closing the browser's picker counts as an error; don't show that one
       const msg = e instanceof Error ? e.message : String(e)
@@ -126,7 +156,7 @@ function ConnectPanel({ pairings, pair }: Pairings) {
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
           Connect a wearable to check its sensors are working and pair it to a resident. Bluetooth and USB work in
-          Chrome or Edge on a computer or Android tablet.
+          Chrome or Edge on a computer or Android tablet; a wearable on the care network can be reached from any browser.
         </p>
         <div className="mt-5 flex flex-wrap gap-3">
           <button
@@ -145,6 +175,24 @@ function ConnectPanel({ pairings, pair }: Pairings) {
             <Usb className="h-4 w-4" strokeWidth={1.5} />
             Connect over USB
           </button>
+          <div className="flex w-full flex-wrap items-center gap-2">
+            <input
+              value={networkUrl}
+              onChange={(e) => setNetworkUrl(e.target.value)}
+              spellCheck={false}
+              aria-label="Network address of the wearable"
+              placeholder={NETWORK_DEFAULT_URL}
+              className="h-10 w-64 min-w-0 rounded-lg border border-line bg-raised px-3 font-mono text-sm text-fg"
+            />
+            <button
+              disabled={!support.network || busy || !networkUrl.trim()}
+              onClick={() => start('network')}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm font-medium text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
+            >
+              <Wifi className="h-4 w-4" strokeWidth={1.5} />
+              Connect over network
+            </button>
+          </div>
           <button
             disabled={busy}
             onClick={() => start('simulated')}
@@ -153,6 +201,10 @@ function ConnectPanel({ pairings, pair }: Pairings) {
             Try a simulated device
           </button>
         </div>
+        <p className="mt-3 text-xs text-fg-3">
+          An UNO Q serves readings at <span className="font-mono">ws://&lt;board-ip&gt;:8765</span> — it can stay on the
+          wing's network instead of being plugged into this computer.
+        </p>
         {(!support.bluetooth || !support.usb) && (
           <p className="mt-3 text-xs text-fg-3">
             This browser doesn't support {!support.bluetooth && !support.usb ? 'Bluetooth or USB' : !support.bluetooth ? 'Bluetooth' : 'USB'}{' '}

@@ -1,0 +1,4 @@
+name: steady_unoq
+description: Steady wearable — Modulino Movement accelerometer and gyroscope, fall detection on the MCU, WebSocket feed for the dashboard
+icon: 📡
+version: "1.0.0"

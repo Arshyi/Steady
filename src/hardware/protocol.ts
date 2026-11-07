@@ -48,3 +48,74 @@ export function parseMotion(view: DataView): Omit<MotionSample, 't'> {
     gz: view.getFloat32(20, true),
   }
 }
+
+// ---------- Network transport (Arduino UNO Q) ----------
+
+/**
+ * `hardware/steady_unoq` serves the same six channels over a WebSocket instead
+ * of Bluetooth: the sketch reads the Modulino Movement and hands each sample to
+ * Python over the Bridge, and the Python app broadcasts JSON text frames.
+ *
+ *   server → app   {"type":"hello","device":"ST-UNOQ1","firmware":"1.0.0","rate":50}
+ *                  {"type":"motion","t":12345,"ax":0.02,"ay":-0.01,"az":1,"gx":12.4,"gy":-3.1,"gz":0.8}
+ *                  {"type":"fall","t":12980,"peak":3.42}
+ *   app → server   {"type":"identify"}
+ *
+ * g and °/s again; `t` is the device's uptime in ms and is optional because the
+ * app times samples with performance.now() like the other transports do.
+ */
+export const NETWORK_DEFAULT_URL = 'ws://127.0.0.1:8765'
+
+/** Local storage key for the last address that worked */
+export const NETWORK_URL_KEY = 'steady.networkUrl'
+
+export type NetworkMessage =
+  | { type: 'hello'; device?: string; firmware?: string; rate?: number }
+  | { type: 'motion'; t?: number; ax: number; ay: number; az: number; gx: number; gy: number; gz: number }
+  | { type: 'fall'; t?: number; peak?: number }
+  | { type: 'error'; message?: string }
+
+function number(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/** Reads one frame from the UNO Q. Malformed or unknown frames return undefined. */
+export function parseNetworkMessage(raw: string): NetworkMessage | undefined {
+  let data: unknown
+  try {
+    data = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (!data || typeof data !== 'object') return undefined
+
+  const frame = data as Record<string, unknown>
+  const t = number(frame.t)
+
+  switch (frame.type) {
+    case 'hello':
+      return {
+        type: 'hello',
+        device: typeof frame.device === 'string' ? frame.device : undefined,
+        firmware: typeof frame.firmware === 'string' ? frame.firmware : undefined,
+        rate: number(frame.rate),
+      }
+    case 'motion': {
+      const ax = number(frame.ax)
+      const ay = number(frame.ay)
+      const az = number(frame.az)
+      const gx = number(frame.gx)
+      const gy = number(frame.gy)
+      const gz = number(frame.gz)
+      if (ax === undefined || ay === undefined || az === undefined) return undefined
+      if (gx === undefined || gy === undefined || gz === undefined) return undefined
+      return { type: 'motion', t, ax, ay, az, gx, gy, gz }
+    }
+    case 'fall':
+      return { type: 'fall', t, peak: number(frame.peak) }
+    case 'error':
+      return { type: 'error', message: typeof frame.message === 'string' ? frame.message : undefined }
+    default:
+      return undefined
+  }
+}
