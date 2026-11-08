@@ -40,5 +40,12 @@ The server uses your Databricks CLI login, so there are no tokens in the project
 | `POST /api/falls` `{ deviceId }` | Fast path for a fall |
 | `POST /api/simulate/fall` `{ residentId }` | Settings → Demo a fall |
 
+## Testing without the UNO Q
+
+`npm run relay:mock` runs a stand-in for the board's relay on your laptop. In Settings, switch to
+Live devices, connect over Wi-Fi to `localhost`, and pair `UNOQ-SIM` to a resident. Type `f` and
+press Enter in the relay's terminal to send a fall. `server/mock-relay.ts` is also the reference
+for what the real relay on the UNO Q has to do.
+
 `movement` is 0–100: the mean gyroscope magnitude in °/s divided by 2, capped at 100.
 Status thresholds are at the top of `state.ts`.
