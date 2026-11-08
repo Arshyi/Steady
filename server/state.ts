@@ -15,6 +15,7 @@ const RESTLESS_AVG = 40 // average movement over 20 min above this -> "needs a c
 const OFFLINE_AFTER_SEC = 120 // no reading for 2 min -> "no data"
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
+const REALERT_AFTER_MIN = 10 // after an alert is handled, wait this long before raising the same one again
 
 export type Status = 'fall' | 'check' | 'up' | 'asleep' | 'offline'
 export type AlertKind = 'fall' | 'check' | 'battery' | 'signal'
@@ -77,8 +78,21 @@ function makeSlots(): string[] {
   return Array.from({ length: WINDOW_HOURS * 2 + 1 }, (_, i) => new Date(last - (WINDOW_HOURS * 2 - i) * step).toISOString())
 }
 
+// Acknowledge/Done/Undo clicks. A Databricks read that started before a click was saved can
+// still return the old value, so each click is kept here and laid over every read until a read
+// that started after the save has run.
+const alertEdits = new Map<string, { handledAt: string | null; savedAt: number | null }>()
+
+function applyAlertEdits(alerts: AlertView[]) {
+  return alerts.map((a) => {
+    const edit = alertEdits.get(a.id)
+    return edit ? { ...a, handledAt: edit.handledAt } : a
+  })
+}
+
 async function refresh() {
   const source = state.mode
+  const startedAt = Date.now()
 
   const [residents, movement, alerts] = await Promise.all([
     sql(
@@ -126,7 +140,7 @@ async function refresh() {
     ),
   ])
 
-  const alertViews: AlertView[] = alerts.map((a) => ({
+  const fromDb: AlertView[] = alerts.map((a) => ({
     id: String(a.alert_id),
     residentId: String(a.resident_id),
     kind: a.kind as AlertKind,
@@ -134,6 +148,9 @@ async function refresh() {
     detail: String(a.detail ?? ''),
     handledAt: a.handled_at ? new Date(String(a.handled_at)).toISOString() : null,
   }))
+  const alertViews = applyAlertEdits(fromDb)
+  // This read started after these clicks were saved, so it already includes them
+  for (const [id, edit] of alertEdits) if (edit.savedAt !== null && edit.savedAt < startedAt) alertEdits.delete(id)
   const open = alertViews.filter((a) => !a.handledAt)
   const openFalls = new Set(open.filter((a) => a.kind === 'fall').map((a) => a.residentId))
   setFallen(openFalls)
@@ -194,9 +211,13 @@ async function refresh() {
 
   // Raise alerts for new problems (one open alert per resident and kind)
   const hasOpen = (rid: string, kind: AlertKind) => open.some((a) => a.residentId === rid && a.kind === kind)
+  const handledRecently = (rid: string, kind: AlertKind) =>
+    alertViews.some(
+      (a) => a.residentId === rid && a.kind === kind && a.handledAt && minutesSince(a.handledAt)! < REALERT_AFTER_MIN,
+    )
   const newAlerts: string[] = []
   const raise = (rid: string, kind: AlertKind, detail: string) => {
-    if (!hasOpen(rid, kind)) newAlerts.push(`(${lit(rid)}, ${lit(kind)}, current_timestamp(), ${lit(detail)}, NULL, ${lit(source)})`)
+    if (!hasOpen(rid, kind) && !handledRecently(rid, kind)) newAlerts.push(`(${lit(rid)}, ${lit(kind)}, current_timestamp(), ${lit(detail)}, NULL, ${lit(source)})`)
   }
   for (const v of views) {
     if (v.status === 'check') raise(v.id, 'check', v.note ?? 'Unusual movement')
@@ -211,16 +232,23 @@ async function refresh() {
 
   // Ignore results if the mode changed while we were reading
   if (source !== state.mode) return
-  state = { ...state, updatedAt: new Date().toISOString(), slots, residents: views, alerts: alertViews, error: null }
+  // Clicks made while this read was running are laid over again
+  state = { ...state, updatedAt: new Date().toISOString(), slots, residents: views, alerts: applyAlertEdits(alertViews), error: null }
   if (newAlerts.length) refreshSoon()
 }
 
 let refreshTimer: NodeJS.Timeout | undefined
 let running = false
+let runAgain = false
 
 async function loop() {
-  if (running) return
+  if (running) {
+    // A read is already going and may have missed the latest change, so do another one after it
+    runAgain = true
+    return
+  }
   running = true
+  runAgain = false
   clearTimeout(refreshTimer)
   try {
     await refresh()
@@ -229,7 +257,8 @@ async function loop() {
     console.error('[refresh]', (e as Error).message)
   }
   running = false
-  refreshTimer = setTimeout(loop, REFRESH_MS)
+  clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(loop, runAgain ? 50 : REFRESH_MS)
 }
 
 /** Refresh straight away instead of waiting for the next tick */
@@ -259,11 +288,43 @@ export async function setMode(mode: Mode) {
 
 // ---------- Actions from the web app and devices ----------
 
+// Databricks rejects two changes to the alerts table that land at the same moment, so save
+// clicks one at a time and retry if another write (like a new alert) got in first.
+let alertWrites: Promise<unknown> = Promise.resolve()
+
+function saveAlert(id: string, handledAt: string | null) {
+  const write = async () => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await sql(
+          `UPDATE ${SCHEMA}.alerts SET handled_at = ${handledAt ? `CAST(${lit(handledAt)} AS TIMESTAMP)` : 'NULL'} WHERE alert_id = :id`,
+          { id },
+        )
+      } catch (e) {
+        if (attempt >= 4 || !/CONCURRENT|conflict/i.test((e as Error).message)) throw e
+        await new Promise((r) => setTimeout(r, 300 * attempt))
+      }
+    }
+  }
+  const next = alertWrites.then(write, write)
+  alertWrites = next.catch(() => {})
+  return next
+}
+
 export async function handleAlert(id: string, handled: boolean) {
-  await sql(
-    `UPDATE ${SCHEMA}.alerts SET handled_at = ${handled ? 'current_timestamp()' : 'NULL'} WHERE alert_id = :id`,
-    { id },
-  )
+  const handledAt = handled ? new Date().toISOString() : null
+  const edit = { handledAt, savedAt: null as number | null }
+  // Show the change to every screen straight away, before Databricks has saved it
+  alertEdits.set(id, edit)
+  state = { ...state, alerts: applyAlertEdits(state.alerts) }
+  try {
+    await saveAlert(id, handledAt)
+    edit.savedAt = Date.now()
+  } catch (e) {
+    if (alertEdits.get(id) === edit) alertEdits.delete(id)
+    refreshSoon()
+    throw e
+  }
   refreshSoon()
 }
 
