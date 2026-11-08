@@ -13,17 +13,17 @@ export interface Alert {
   handledAt: string | null
   /** Who cleared it, when it wasn't the dashboard */
   handledBy?: string | null
-  /** When the wearer pressed "I'm OK". The alert stays open. */
+  /** When a worker confirmed they responded. The alert stays open. */
   acknowledgedAt?: string | null
   acknowledgedBy?: string | null
-  /** Falls only: no movement since, not acknowledged, or acknowledged */
+  /** Falls only: no movement since, no worker yet, or worker responded */
   urgency?: Urgency | null
 }
 
 export const urgencyLabel: Record<Urgency, string> = {
   critical: 'No movement since the fall',
-  urgent: 'Not acknowledged yet',
-  watch: 'Says they’re OK',
+  urgent: 'No worker yet',
+  watch: 'Worker responded',
 }
 
 /** 0 is the most urgent; alerts that are not falls come last */

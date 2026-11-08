@@ -32,7 +32,7 @@ export interface DeviceEvents {
   onMotion: (sample: MotionSample) => void
   onFall: (detail?: FallDetail) => void
   onDisconnect: () => void
-  /** The wearer pressed the button once: "I'm OK". */
+  /** A worker pressed the button once to confirm they responded. */
   onOk?: () => void
   /** The board finished a survey capture (three presses). */
   onSurvey?: (summary: SurveySummary) => void

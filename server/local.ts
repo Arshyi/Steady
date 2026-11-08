@@ -383,8 +383,8 @@ function movedSince(a: LocalAlert, since: number): boolean {
 
 /**
  * Falls never close on their own. The tier only says how fast someone should go:
- * nobody moving since the fall outranks "hasn't pressed I'm OK", which outranks
- * "pressed I'm OK". All three still expect a member of staff to check.
+ * nobody moving since the fall outranks "no worker response yet", which outranks
+ * "worker responded". All three still expect a member of staff to check.
  */
 function urgencyOf(a: LocalAlert, now: number): Urgency | null {
   if (a.kind !== 'fall' || a.handledAt) return null
@@ -556,10 +556,10 @@ export async function acknowledgeDevice(deviceId: string): Promise<AckResult | n
     .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))[0]
   if (newest) {
     newest.acknowledgedAt = iso(Date.now())
-    newest.acknowledgedBy = "I'm OK button"
+    newest.acknowledgedBy = "Worker responded"
     refreshSoon()
   }
-  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: "I'm OK button" }
+  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: "Worker responded" }
 }
 
 export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {

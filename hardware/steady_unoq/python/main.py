@@ -5,7 +5,7 @@ a second and hands events to this script over the Bridge:
 
     "12345,0.02,-0.01,1.00,12.4,-3.1,0.8"    motion:  ms, ax, ay, az, gx, gy, gz
     "12980,3.42,180"                         fall:    ms, peak_g, free_fall_ms
-    "13110,1"                                I'm OK:  ms, presses
+    "13110,1"                                worker response: ms, presses
     "14002,3"                                survey:  ms, presses (three taps)
 
 This script is the board's relay. It serves the dashboard over a WebSocket using
@@ -14,7 +14,7 @@ the same text lines as USB serial (see `src/hardware/protocol.ts`):
     I,<deviceId>,<firmware>       answer to "I?"
     M,ax,ay,az,gx,gy,gz           every sample
     F                             a fall
-    O                             "I'm OK" pressed
+    O                             worker confirmed they responded
     S,<scans>,<accessPoints>      a survey capture was stored
     L,<room>,<floor>,<confidence> the survey store matched a room
 
@@ -307,12 +307,12 @@ def _maybe_locate() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Acknowledgements ("I'm OK")
+# Acknowledgements (worker response)
 # ---------------------------------------------------------------------------
 
 
 def _ack() -> None:
-    """Tell the server the wearer pressed "I'm OK" and log it for the dashboard."""
+    """Tell the server a worker confirmed they responded, and log it for the dashboard."""
     payload = {"deviceId": CONFIG["device_id"], "kind": "ok"}
     acked = _to_server("/api/acks", payload)
     if acked is None:

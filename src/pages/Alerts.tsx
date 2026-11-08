@@ -66,7 +66,7 @@ export function Alerts() {
   const [filter, setFilter] = useState<Filter>('all')
 
   const visible = alerts.filter((a) => matches(a, filter))
-  // Most urgent first: a fall nobody has moved from outranks one the resident acknowledged
+  // Most urgent first: a fall nobody has moved from outranks one a worker has confirmed
   const active = visible.filter((a) => !a.handledAt).sort((a, b) => urgencyRank(a) - urgencyRank(b) || newestFirst(a, b))
   const handled = visible.filter((a) => a.handledAt).sort(newestFirst)
 

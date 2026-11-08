@@ -139,7 +139,7 @@ export function AlertRow({ alert, resident: given, onHandle, onUndo }: AlertRowP
           {alert.acknowledgedAt && (
             <>
               {' '}
-              · I'm OK at <span className="font-mono tabular-nums">{clock(alert.acknowledgedAt)}</span>, still needs a visit
+              · Worker responded at <span className="font-mono tabular-nums">{clock(alert.acknowledgedAt)}</span>, still needs a visit
             </>
           )}
           {isFall && resident.heartRate !== null && (

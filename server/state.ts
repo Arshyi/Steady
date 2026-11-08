@@ -407,15 +407,15 @@ async function flush() {
 }
 
 /**
- * The wearer pressed "I'm OK": downgrade that resident's newest open fall and
- * record the press, leaving the alert open for staff.
+ * A worker confirmed they responded: downgrade that resident's newest open fall
+ * and record the confirmation, leaving the alert open for staff.
  */
 export async function acknowledgeDevice(deviceId: string): Promise<AckResult | null> {
   pairingCache.delete(deviceId)
   const residentId = await cachedResident(deviceId)
   if (!residentId) return null
 
-  const by = "I'm OK button"
+  const by = "Worker responded"
   const rows = await sql(
     `SELECT alert_id FROM ${SCHEMA}.alerts
      WHERE resident_id = :resident AND kind = 'fall' AND handled_at IS NULL

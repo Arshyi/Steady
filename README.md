@@ -145,20 +145,20 @@ the old D2-to-GND wiring, because D4 idling low changes nothing.
 
 | Gesture | Result |
 | --- | --- |
-| One press | "I'm OK": the fall drops to the lowest urgency and still needs a visit |
+| One press | Worker confirms they responded: the fall drops to the lowest urgency |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
 
 ### How a fall is triaged
 
-A fall stays on the Alerts page until a member of staff marks it checked. Pressing
-"I'm OK" never closes it: it only moves the fall down the list.
+A fall stays on the Alerts page until a member of staff marks it checked. A worker
+confirming they responded never closes it: it only moves the fall down the list.
 
 | Urgency | What happened | Badge on the row |
 | --- | --- | --- |
 | Highest | Fell, and nothing has moved since | No movement since the fall |
-| Middle | Fell, and no "I'm OK" press | Not acknowledged yet |
-| Lowest | Fell, and the wearer pressed "I'm OK" | Says they’re OK |
+| Middle | Fell, and no worker has confirmed a response | No worker yet |
+| Lowest | Fell, and a worker confirmed they responded | Worker responded |
 
 The highest tier wins even after a press: lying still matters more than pressing a
 button. Movement has to come from the device itself, so the demo fill cannot clear
@@ -275,7 +275,7 @@ tables on first start, runs the simulator in **Simulated** mode, serves `/api/st
 | `POST /api/pairings` `{residentId, deviceId, firmware}` | Settings, Pair |
 | `POST /api/readings` | Devices, the relay, or Settings with a device connected |
 | `POST /api/falls` `{deviceId, detail}` | Fast path for a fall |
-| `POST /api/acks` `{deviceId, kind}` | "I'm OK" button |
+| `POST /api/acks` `{deviceId, kind}` | Worker response confirmation |
 | `POST /api/simulate/fall` `{residentId}` | Settings, demo a fall |
 
 Batched ingest folds 10–200 Hz samples into one reading per second, and each event
@@ -317,7 +317,7 @@ Device to app:
 | `B,87` | battery percent (the UNO Q cannot measure it and sends none) |
 | `M,ax,ay,az,gx,gy,gz` | one sample: accel in g, gyro in °/s |
 | `F,peak,tilt,confidence` | fall confirmed by the board (`F` alone is also valid) |
-| `O` | the wearer pressed the button once: "I'm OK" |
+| `O` | a worker confirmed they responded (one button press) |
 | `S,5,9` | a survey capture was stored (scans, access points) |
 | `L,103,1,82` | the survey store placed the device in room 103, floor 1, 82% sure |
 
@@ -329,7 +329,7 @@ the device, `S` captures the current room.
 `hardware/steady_unoq/` runs the wearable without USB. The STM32 sketch reads the
 MPU6050 and detects falls; the Debian side (`python/main.py`) serves the protocol
 over `ws://0.0.0.0:8765` and posts a one-second summary to `/api/readings`, falls to
-`/api/falls`, and "I'm OK" presses to `/api/acks`. It also runs survey mode: three
+`/api/falls`, and worker responses to `/api/acks`. It also runs survey mode: three
 button presses scan Wi-Fi and post fingerprints to the Worker, and later scans are
 matched to a room and stored as a location. A button across D2 and D4 is supported.
 
@@ -350,7 +350,7 @@ does not isolate a user's own devices), the app is installed at
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
 and gyroscope values. The button has been pressed on the real board: one press posts
-an "I'm OK" ack (the server records `acknowledgedBy`) that only lowers the fall's
+a worker response ack (the server records `acknowledgedBy`) that only lowers the fall's
 urgency, and three presses fire the survey gesture.
 
 Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the

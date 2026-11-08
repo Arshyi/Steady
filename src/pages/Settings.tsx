@@ -204,7 +204,7 @@ function ConnectPanel() {
   const [residentId, setResidentId] = useState('')
   const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
   const [address, setAddress] = useState(savedAddress)
-  // "I'm OK", a survey or a room match, as the board reported it
+  // a worker response, a survey or a room match, as the board reported it
   const [lastEvent, setLastEvent] = useState<string>()
 
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
@@ -272,7 +272,7 @@ function ConnectPanel() {
         ].filter(Boolean)
         setLastEvent(measured.length ? `Fall detected · ${measured.join(', ')}` : 'Fall detected')
       },
-      onOk: () => setLastEvent(`"I'm OK" pressed at ${stamp()}`),
+      onOk: () => setLastEvent(`Worker responded at ${stamp()}`),
       onSurvey: (summary: { scans?: number; accessPoints?: number }) =>
         setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`),
       onLocation: (place: { room?: string; floor?: string; confidence?: number }) =>

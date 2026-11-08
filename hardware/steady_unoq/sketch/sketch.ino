@@ -7,7 +7,7 @@
 // and README.md.
 //
 // Controls on the wearable:
-//   * one press of the button      → "I'm OK", acknowledged on the dashboard
+//   * one press of the button      → worker confirmed, acknowledged on the dashboard
 //   * three presses within ~1.5 s  → SURVEY MODE: the Linux side scans Wi-Fi and
 //                                    uploads a fingerprint for the room
 // The button is the only input, so the gesture is decided after a short pause
@@ -230,7 +230,7 @@ void publishSample(uint32_t now, float ax, float ay, float az, float gx, float g
 
 /**
  * Decides what a finished gesture meant. Called once the button has been quiet
- * for GESTURE_GAP_MS, which is why a single "I'm OK" press takes ~0.7 s to send.
+ * for GESTURE_GAP_MS, which is why a single confirmation press takes ~0.7 s to send.
  */
 void emitGesture(uint8_t presses, uint32_t now) {
   char line[24];
@@ -243,7 +243,7 @@ void emitGesture(uint8_t presses, uint32_t now) {
   } else if (presses == 1) {
     Bridge.call("steady_ok", String(line));
     blink(OK_BLINKS);
-    Monitor.println("[steady] I'm OK");
+    Monitor.println("[steady] worker responded");
   }
   // Two presses is almost always a fumbled double tap; ignore it rather than
   // acknowledge something the wearer did not mean.

@@ -37,7 +37,7 @@ export interface AlertView {
   /** Set when staff resolved it on the dashboard. A device press never sets this. */
   handledAt: string | null
   handledBy: string | null
-  /** Set when the wearer pressed "I'm OK": the alert stays open for staff. */
+  /** Set when a worker confirmed they responded: the alert stays open for staff. */
   acknowledgedAt: string | null
   acknowledgedBy: string | null
   /** Falls only: no movement since the fall, not acknowledged, or acknowledged */

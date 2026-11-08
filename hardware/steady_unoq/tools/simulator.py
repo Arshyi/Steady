@@ -5,7 +5,7 @@ Use it to work on the Settings page when no UNO Q is at hand:
     python hardware/steady_unoq/tools/simulator.py --port 8765
 
 It serves what `python/main.py` serves — the info line, 50 Hz `M` samples and
-`F` on a fall — plus the survey-mode traffic (an "I'm OK" press, a survey capture
+`F` on a fall — plus the survey-mode traffic (a worker response press, a survey capture
 and a room match) so every dashboard state can be exercised. Stop it with Ctrl+C.
 """
 
@@ -105,7 +105,7 @@ def main() -> None:
             if now >= next_ack:
                 next_ack = now + ack_gap
                 server.broadcast("O\n")
-                print("[sim] I'm OK")
+                print("[sim] worker responded")
                 ack_index += 1
             if now >= next_survey:
                 next_survey = now + 60.0

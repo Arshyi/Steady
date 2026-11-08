@@ -15,12 +15,12 @@ function ago(ts: number) {
 }
 
 function ackLabel(_ack: AckRow) {
-  return "I'm OK pressed"
+  return "Worker responded"
 }
 
 /**
  * SURVEY MODE, from the dashboard's side: label the captures the wearable made,
- * see where the backend last placed it, and watch "I'm OK" presses come in. The
+ * see where the backend last placed it, and watch worker responses come in. The
  * board does the scanning and posting, so this only reads back.
  */
 export function SurveyPanel({ device, lastEvent }: { device?: string; lastEvent?: string }) {

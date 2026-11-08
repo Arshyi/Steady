@@ -7,7 +7,7 @@
 //   B,87                     battery percent (the UNO Q cannot measure it, so it sends none)
 //   M,ax,ay,az,gx,gy,gz      motion sample: accel in g, gyro in degrees per second
 //   F                        fall detected
-//   O                        the wearer pressed the button once: "I'm OK"
+//   O                        a worker confirmed they responded (button press)
 //   S,5,9                    a survey capture was stored (scans, access points)
 //   L,103,1,82               the backend placed the board in room 103, floor 1, 82% sure
 //

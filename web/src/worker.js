@@ -16,7 +16,7 @@
  *   POST /api/v1/surveys/:id/label       name a capture's room and floor
  *   POST /api/v1/locate                  match a scan against the fingerprints (device)
  *   GET  /api/v1/location?device=        where that device was last placed
- *   POST /api/v1/acks                    "I'm OK" press (device)
+ *   POST /api/v1/acks                    worker response confirmation (device)
  *   GET  /api/v1/acks?device=&limit=     acknowledgement feed
  *
  * Read endpoints require the dashboard key (x-view-key header or ?key=); the

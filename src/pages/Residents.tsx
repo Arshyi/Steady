@@ -134,7 +134,7 @@ function ResidentDetail({ r }: { r: Resident }) {
                   {a.handledAt
                     ? `Handled ${clock(a.handledAt)}`
                     : a.acknowledgedAt
-                      ? `I'm OK ${clock(a.acknowledgedAt)} · still open`
+                      ? `Worker responded ${clock(a.acknowledgedAt)} · still open`
                       : 'Open'}
                 </span>
               </li>
