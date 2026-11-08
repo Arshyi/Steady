@@ -20,7 +20,7 @@ has fallen. Staff use **Settings** in the web app to test devices and pair them 
 | Live gyroscope chart | `src/components/LiveTrace.tsx` | Done |
 | Pairings | `src/hardware/pairings.ts` | Saved in browser `localStorage` only, no backend yet |
 | Device data shown elsewhere (battery, signal, firmware) | `src/data/residents.ts` | **Placeholder data** |
-| Flashing guide | `hardware/README.md` | Done |
+| Flashing guide | `README.md` | Done |
 
 ## The data contract
 

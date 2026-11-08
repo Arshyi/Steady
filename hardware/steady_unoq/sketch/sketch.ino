@@ -4,7 +4,7 @@
 // for the free-fall-then-impact pattern of a fall, and hands everything to the
 // Linux side over the Bridge. `python/main.py` serves those samples to the
 // dashboard over WebSocket; the data contract lives in src/hardware/protocol.ts
-// and hardware/steady_unoq/README.md.
+// and README.md.
 //
 // Controls on the wearable:
 //   * one press of the button      → "I'm OK", acknowledged on the dashboard
