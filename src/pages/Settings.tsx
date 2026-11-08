@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bluetooth, Usb, Check, Circle, Lightbulb } from 'lucide-react'
+import { Bluetooth, Usb, Wifi, Check, Circle, Lightbulb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
-import { connectBluetooth, connectUsb, connectSimulated, support, type Connection, type Transport } from '../hardware/connection'
+import { connectBluetooth, connectUsb, connectWifi, connectSimulated, support, type Connection, type Transport } from '../hardware/connection'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
 
@@ -15,6 +15,7 @@ const SEND_EVERY_MS = 1000
 const transportLabel: Record<Transport, string> = {
   bluetooth: 'Connected over Bluetooth',
   usb: 'Connected over USB',
+  wifi: 'Connected over Wi-Fi',
   simulated: 'Demo device',
 }
 
@@ -29,6 +30,15 @@ interface LiveDevice {
 }
 
 const emptyDevice: LiveDevice = { rate: 0, gyroMoved: false, fallSeen: false }
+
+const ADDRESS_KEY = 'steady.boardAddress'
+function savedAddress() {
+  try {
+    return localStorage.getItem(ADDRESS_KEY) ?? 'unoq.local'
+  } catch {
+    return 'unoq.local'
+  }
+}
 
 // ---------- Data source ----------
 
@@ -187,6 +197,7 @@ function ConnectPanel() {
   const [busy, setBusy] = useState(false)
   const [residentId, setResidentId] = useState('')
   const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
+  const [address, setAddress] = useState(savedAddress)
 
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
   const buffer = useRef<MotionSample[]>([])
@@ -194,6 +205,8 @@ function ConnectPanel() {
   const lastSent = useRef(0)
   const modeRef = useRef(mode)
   modeRef.current = mode
+  // A board on Wi-Fi sends its own readings and falls to the server, so the browser doesn't
+  const forwardRef = useRef(true)
 
   useEffect(() => {
     if (!conn) return
@@ -207,7 +220,7 @@ function ConnectPanel() {
 
       // In "Live devices" mode, send a one-second summary to Databricks through the server
       const d = devRef.current
-      if (modeRef.current === 'device' && d.id && lastSecond.length && now - lastSent.current >= SEND_EVERY_MS) {
+      if (forwardRef.current && modeRef.current === 'device' && d.id && lastSecond.length && now - lastSent.current >= SEND_EVERY_MS) {
         lastSent.current = now
         post('/api/readings', { deviceId: d.id, battery: d.battery ?? null, ...summarize(lastSecond) })
           .then((r: { accepted: number }) =>
@@ -229,6 +242,7 @@ function ConnectPanel() {
     devRef.current = { ...emptyDevice }
     setDev(devRef.current)
     const update = (patch: Partial<LiveDevice>) => (devRef.current = { ...devRef.current, ...patch })
+    forwardRef.current = kind !== 'wifi'
 
     const events = {
       onInfo: (id: string, firmware: string) => update({ id, firmware }),
@@ -241,14 +255,28 @@ function ConnectPanel() {
       onFall: () => {
         update({ fallSeen: true })
         // Fast path: falls go straight to the server
-        if (modeRef.current === 'device' && devRef.current.id) post('/api/falls', { deviceId: devRef.current.id }).catch(() => {})
+        if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
+          post('/api/falls', { deviceId: devRef.current.id }).catch(() => {})
       },
       onDisconnect: () => setConn(undefined),
     }
 
     try {
+      if (kind === 'wifi') {
+        try {
+          localStorage.setItem(ADDRESS_KEY, address)
+        } catch {
+          // fine, just not remembered
+        }
+      }
       const c =
-        kind === 'bluetooth' ? await connectBluetooth(events) : kind === 'usb' ? await connectUsb(events) : await connectSimulated(events)
+        kind === 'bluetooth'
+          ? await connectBluetooth(events)
+          : kind === 'usb'
+            ? await connectUsb(events)
+            : kind === 'wifi'
+              ? await connectWifi(address, events)
+              : await connectSimulated(events)
       setConn(c)
     } catch (e) {
       // Closing the browser's picker counts as an error; don't show that one
@@ -268,14 +296,35 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable to check its sensors are working and pair it to a resident. Bluetooth and USB work in
-          Chrome or Edge on a computer or Android tablet.
+          Connect a wearable to check its sensors are working and pair it to a resident. For the UNO Q, use Wi-Fi.
+          Bluetooth and USB work in Chrome or Edge on a computer or Android tablet.
         </p>
-        <div className="mt-5 flex flex-wrap gap-3">
+        <div className="mt-5 flex flex-wrap gap-2">
+          <label className="sr-only" htmlFor="board-address">
+            Board address
+          </label>
+          <input
+            id="board-address"
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && address && start('wifi')}
+            placeholder="Board address, e.g. unoq.local or 192.168.1.40"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 font-mono text-sm text-fg placeholder:font-sans placeholder:text-fg-3 sm:max-w-80"
+          />
+          <button
+            disabled={!address || busy}
+            onClick={() => start('wifi')}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-fg px-4 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+          >
+            <Wifi className="h-4 w-4" strokeWidth={1.5} />
+            Connect over Wi-Fi
+          </button>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-3">
           <button
             disabled={!support.bluetooth || busy}
             onClick={() => start('bluetooth')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-fg px-4 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm font-medium text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
           >
             <Bluetooth className="h-4 w-4" strokeWidth={1.5} />
             Connect over Bluetooth
@@ -358,9 +407,11 @@ function ConnectPanel() {
             {dev.rate} samples/s{dev.battery !== undefined && ` · battery ${dev.battery}%`}
           </p>
           <p className="mt-1 text-xs text-fg-2">
-            {mode === 'device'
-              ? sent.note ?? (sent.ok ? `Sending to Databricks · ${sent.ok} summaries sent` : 'Sending to Databricks…')
-              : 'Not sending to Databricks. Switch the data source to Live devices to send these readings.'}
+            {conn.transport === 'wifi'
+              ? 'The board sends its own readings to Databricks. This view is for checking the sensor.'
+              : mode === 'device'
+                ? sent.note ?? (sent.ok ? `Sending to Databricks · ${sent.ok} summaries sent` : 'Sending to Databricks…')
+                : 'Not sending to Databricks. Switch the data source to Live devices to send these readings.'}
           </p>
         </div>
 

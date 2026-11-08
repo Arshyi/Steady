@@ -1,9 +1,9 @@
-// Connects to a Steady wearable over Bluetooth, USB, or a built-in simulator.
+// Connects to a Steady wearable over Bluetooth, USB, Wi-Fi, or a built-in simulator.
 // All three give the same events, so the Settings page doesn't care which one is used.
 
 import { STEADY_SERVICE, CHAR, CMD_IDENTIFY, SERIAL_BAUD, parseMotion, type MotionSample } from './protocol'
 
-export type Transport = 'bluetooth' | 'usb' | 'simulated'
+export type Transport = 'bluetooth' | 'usb' | 'wifi' | 'simulated'
 
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
@@ -142,6 +142,48 @@ function handleLine(line: string, ev: DeviceEvents) {
     case 'F':
       ev.onFall()
       break
+  }
+}
+
+// ---------- Wi-Fi (UNO Q relay) ----------
+
+/** Port the relay on the board listens on for the Settings page */
+export const WIFI_PORT = 8765
+
+/**
+ * Connects to the relay running on the board's Linux side over a WebSocket.
+ * It speaks the same text lines as USB serial (see protocol.ts): I, B, M, F in; "I?" and "I" out.
+ */
+export async function connectWifi(address: string, ev: DeviceEvents): Promise<Connection> {
+  const host = address.trim().replace(/\/+$/, '')
+  const url = /^wss?:\/\//.test(host) ? host : `ws://${host}${/:\d+$/.test(host) ? '' : `:${WIFI_PORT}`}`
+
+  const ws = new WebSocket(url)
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.close()
+      reject(new Error(`No answer from ${url}. Check the board is on and on the same Wi-Fi.`))
+    }, 5000)
+    ws.onopen = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    ws.onerror = () => {
+      clearTimeout(timer)
+      reject(new Error(`Couldn't connect to ${url}. Check the address and that the relay is running.`))
+    }
+  })
+
+  ws.onmessage = (e) => {
+    for (const line of String(e.data).split('\n')) handleLine(line.trim(), ev)
+  }
+  ws.onclose = () => ev.onDisconnect()
+  ws.send('I?\n')
+
+  return {
+    transport: 'wifi',
+    identify: async () => ws.send('I\n'),
+    disconnect: async () => ws.close(),
   }
 }
 
