@@ -1,9 +1,9 @@
-// Connects to a Steady wearable over Bluetooth, USB, Wi-Fi, or a built-in simulator.
-// All three give the same events, so the Settings page doesn't care which one is used.
+// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), or a built-in demo device.
+// Both give the same events, so the Settings page doesn't care which one is used.
 
-import { STEADY_SERVICE, CHAR, CMD_IDENTIFY, SERIAL_BAUD, parseMotion, type MotionSample } from './protocol'
+import type { MotionSample } from './protocol'
 
-export type Transport = 'bluetooth' | 'usb' | 'wifi' | 'simulated'
+export type Transport = 'wifi' | 'simulated'
 
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
@@ -19,112 +19,7 @@ export interface Connection {
   disconnect: () => Promise<void>
 }
 
-export const support = {
-  bluetooth: typeof navigator !== 'undefined' && 'bluetooth' in navigator,
-  usb: typeof navigator !== 'undefined' && 'serial' in navigator,
-}
-
-// ---------- Bluetooth ----------
-
-export async function connectBluetooth(ev: DeviceEvents): Promise<Connection> {
-  // Opens the browser's device picker, showing only Steady wearables
-  const device = await navigator.bluetooth.requestDevice({
-    filters: [{ services: [STEADY_SERVICE] }],
-    optionalServices: ['battery_service'],
-  })
-  device.addEventListener('gattserverdisconnected', ev.onDisconnect)
-
-  const server = await device.gatt!.connect()
-  const service = await server.getPrimaryService(STEADY_SERVICE)
-
-  const info = await (await service.getCharacteristic(CHAR.info)).readValue()
-  const [id, firmware] = new TextDecoder().decode(info).split(';')
-  ev.onInfo(id, firmware)
-
-  try {
-    const battery = await (await server.getPrimaryService('battery_service')).getCharacteristic('battery_level')
-    ev.onBattery((await battery.readValue()).getUint8(0))
-    await battery.startNotifications()
-    battery.addEventListener('characteristicvaluechanged', (e) =>
-      ev.onBattery((e.target as BluetoothRemoteGATTCharacteristic).value!.getUint8(0)),
-    )
-  } catch {
-    // Battery service is optional on the device
-  }
-
-  const motion = await service.getCharacteristic(CHAR.motion)
-  await motion.startNotifications()
-  motion.addEventListener('characteristicvaluechanged', (e) => {
-    const value = (e.target as BluetoothRemoteGATTCharacteristic).value!
-    ev.onMotion({ t: performance.now(), ...parseMotion(value) })
-  })
-
-  const fall = await service.getCharacteristic(CHAR.fall)
-  await fall.startNotifications()
-  fall.addEventListener('characteristicvaluechanged', (e) => {
-    if ((e.target as BluetoothRemoteGATTCharacteristic).value!.getUint8(0) === 1) ev.onFall()
-  })
-
-  const command = await service.getCharacteristic(CHAR.command)
-
-  return {
-    transport: 'bluetooth',
-    identify: () => command.writeValue(new Uint8Array([CMD_IDENTIFY])),
-    disconnect: async () => device.gatt?.disconnect(),
-  }
-}
-
-// ---------- USB serial ----------
-
-export async function connectUsb(ev: DeviceEvents): Promise<Connection> {
-  // Opens the browser's port picker
-  const port = await navigator.serial.requestPort()
-  await port.open({ baudRate: SERIAL_BAUD })
-
-  const encoder = new TextEncoder()
-  const send = async (text: string) => {
-    const writer = port.writable!.getWriter()
-    await writer.write(encoder.encode(text))
-    writer.releaseLock()
-  }
-
-  const decoder = new TextDecoderStream()
-  const closed = port.readable!.pipeTo(decoder.writable as WritableStream<Uint8Array>).catch(() => {})
-  const reader = decoder.readable.getReader()
-  let stopped = false
-
-  // Read lines until disconnected
-  ;(async () => {
-    let buffer = ''
-    try {
-      while (!stopped) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += value
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-        for (const line of lines) handleLine(line.trim(), ev)
-      }
-    } catch {
-      // Port unplugged
-    }
-    ev.onDisconnect()
-  })()
-
-  await send('I?\n') // ask the device to report its info
-
-  return {
-    transport: 'usb',
-    identify: () => send('I\n'),
-    disconnect: async () => {
-      stopped = true
-      await reader.cancel().catch(() => {})
-      await closed
-      await port.close().catch(() => {})
-    },
-  }
-}
-
+/** Parse one text line from the device (format in protocol.ts) */
 function handleLine(line: string, ev: DeviceEvents) {
   const parts = line.split(',')
   switch (parts[0]) {
@@ -152,7 +47,7 @@ export const WIFI_PORT = 8765
 
 /**
  * Connects to the relay running on the board's Linux side over a WebSocket.
- * It speaks the same text lines as USB serial (see protocol.ts): I, B, M, F in; "I?" and "I" out.
+ * It speaks the text lines in protocol.ts: I, B, M, F in; "I?" and "I" out.
  */
 export async function connectWifi(address: string, ev: DeviceEvents): Promise<Connection> {
   const host = address.trim().replace(/\/+$/, '')

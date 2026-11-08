@@ -15,7 +15,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["vite/client", "web-bluetooth", "w3c-web-serial"]
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
