@@ -9,7 +9,7 @@ profiles:
       - platform: arduino:zephyr
     libraries:
       - Arduino_RouterBridge
-      # Optional: reply to an alert by tapping an NFC tag on the wearable. No
+      # Optional: a worker verifies their visit by tapping a tag on the wearable. No
       # reader is fitted yet, so the sketch builds without it - the NFC block is
       # compiled out and taps come from the relay's dummy mode or the simulator.
       # Not fitted: install "Adafruit PN532" in App Lab to enable the NFC block.

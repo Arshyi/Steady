@@ -10,7 +10,7 @@
 //   * one press of the button      → "I'm OK", acknowledged on the dashboard
 //   * three presses within ~1.5 s  → SURVEY MODE: the Linux side scans Wi-Fi and
 //                                    uploads a fingerprint for the room
-//   * tapping an NFC tag           → "responder was here", same acknowledgement
+//   * tapping an NFC tag           → worker verifies the visit; the alert is handled
 // The button is the only input, so the gesture is decided after a short pause
 // rather than on key-up: a single press cannot be reported until the code knows
 // two more are not coming.
@@ -23,7 +23,7 @@
 // the Adafruit PN532 library in App Lab and it is picked up automatically. With
 // no reader the sketch still builds and taps arrive as dummy data from the
 // relay (`dummy_nfc_every_s` in python/main.py) or from the simulator, so the
-// responder flow can be exercised without the hardware.
+// worker-verification flow can be exercised without the hardware.
 //
 // This replaces hardware/steady_wearable (Nano 33 BLE): the UNO Q has no BLE
 // radio visible to the sketch, and no onboard IMU.
@@ -353,7 +353,7 @@ void pollNfc(uint32_t now) {
   snprintf(line, sizeof line, "%lu,%s", (unsigned long)now, hex);
   Bridge.call("steady_nfc", String(line));
   blink(TAP_BLINKS);
-  Monitor.print("[steady] responder tap ");
+  Monitor.print("[steady] visit verified with tag ");
   Monitor.println(hex);
 #endif
 }

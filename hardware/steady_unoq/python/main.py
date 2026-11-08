@@ -7,7 +7,7 @@ a second and hands events to this script over the Bridge:
     "12980,3.42,180"                         fall:    ms, peak_g, free_fall_ms
     "13110,1"                                I'm OK:  ms, presses
     "14002,3"                                survey:  ms, presses (three taps)
-    "14400,04:A2:33:9C:1B:80"                NFC tap: ms, tag uid
+    "14400,04:A2:33:9C:1B:80"                NFC visit check: ms, tag uid
 
 This script is the board's relay. It serves the dashboard over a WebSocket using
 the same text lines as USB serial (see `src/hardware/protocol.ts`):
@@ -16,7 +16,7 @@ the same text lines as USB serial (see `src/hardware/protocol.ts`):
     M,ax,ay,az,gx,gy,gz           every sample
     F                             a fall
     O                             "I'm OK" pressed
-    T,<tag>                       a responder tapped an NFC tag
+    T,<tag>                       a worker verified the visit with a tag tap
     S,<scans>,<accessPoints>      a survey capture was stored
     L,<room>,<floor>,<confidence> the survey store matched a room
 
@@ -72,7 +72,7 @@ CONFIG = {
     "survey_interval_s": 1.5,
     # Scan and match every N seconds (0 = only when a survey is taken)
     "locate_every_s": 0,
-    # NFC is not fitted yet: >0 makes the relay emit a dummy responder tap this
+    # No reader is fitted yet: >0 makes the relay emit a dummy worker tap this
     # often, so the dashboard and backend can be exercised with fake tag data.
     "dummy_nfc_every_s": 0,
     "dummy_nfc_tag": "04A2339C1B80",
@@ -330,12 +330,16 @@ def _maybe_locate() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Acknowledgements ("I'm OK", NFC taps)
+# Responses ("I'm OK" press, NFC visit check)
 # ---------------------------------------------------------------------------
 
 
 def _ack(kind: str, tag: str | None = None) -> None:
-    """Clear the resident's alert on the server and log the response for the dashboard."""
+    """Tell the server and the survey store about the response.
+
+    An "I'm OK" press only lowers the fall's urgency. A tag tap is a worker
+    proving they are at the bedside, so the server marks the fall handled.
+    """
     payload = {"deviceId": CONFIG["device_id"], "kind": kind}
     if tag:
         payload["tag"] = tag
@@ -422,7 +426,7 @@ def loop() -> None:
             continue
         _broadcast(f"T,{tap['tag']}")
         _ack("nfc", tap["tag"])
-        print(f"[steady] responder tap {tap['tag']}")
+        print(f"[steady] visit verified with tag {tap['tag']}")
 
     while _surveys:
         _surveys.popleft()

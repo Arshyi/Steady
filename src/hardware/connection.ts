@@ -34,7 +34,7 @@ export interface DeviceEvents {
   onDisconnect: () => void
   /** The wearer pressed the button once: "I'm OK". */
   onOk?: () => void
-  /** A staff member tapped an NFC tag on the wearable. */
+  /** A worker tapped the tag to confirm they responded: the server marks the alert handled. */
   onTap?: (tag: string) => void
   /** The board finished a survey capture (three presses). */
   onSurvey?: (summary: SurveySummary) => void

@@ -548,7 +548,7 @@ export async function ingestReadings(list: DeviceReading[]) {
   return accepted
 }
 
-/** Who pressed "I'm OK", in words the dashboard shows next to the alert */
+/** Who responded, in words the dashboard shows next to the alert */
 function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
   if (kind === 'ok') return "I'm OK button"
   return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
@@ -561,12 +561,18 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
   const newest = alerts
     .filter((a) => a.residentId === residentId && a.kind === 'fall' && !a.handledAt && a.source === currentSource())
     .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))[0]
+  // A tag tap is a worker proving they are at the bedside, so it resolves the fall.
+  if (kind === 'nfc') {
+    if (newest) await handleAlert(newest.id, true, by)
+    return { residentId, alertId: newest?.id ?? null, acknowledgedBy: by, handled: Boolean(newest) }
+  }
+
   if (newest) {
     newest.acknowledgedAt = iso(Date.now())
     newest.acknowledgedBy = by
     refreshSoon()
   }
-  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: by }
+  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: by, handled: false }
 }
 
 export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {

@@ -8,7 +8,7 @@
 //   POST /api/pairings              { residentId, deviceId, firmware? }
 //   POST /api/readings              [{ deviceId, movement, gyroDps, accelG, battery, ... }]  from devices or the relay
 //   POST /api/falls                 { deviceId }  fast path for a fall
-//   POST /api/acks                  { deviceId, kind, tag? }  the wearable's I'm OK / NFC tap
+//   POST /api/acks                  { deviceId, kind, tag? }  I'm OK press, or a worker's NFC visit check
 //   POST /api/simulate/fall         { residentId }  demo: make a simulated resident fall
 //
 //   GET  /api/accounts              public: is login / registering turned on

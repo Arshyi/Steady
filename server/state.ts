@@ -406,16 +406,15 @@ async function flush() {
   }
 }
 
-/** Who cleared an alert, in words the dashboard shows next to it */
+/** Who responded, in words the dashboard shows next to it */
 function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
   if (kind === 'ok') return "I'm OK button"
   return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
 }
 
 /**
- * The wearer pressed "I'm OK", or a staff member tapped an NFC tag on the device.
- * Clears that resident's newest open alert and records who did it, so the
- * dashboard can say "handled via I'm OK button".
+ * An "I'm OK" press downgrades the newest open fall and leaves it open for staff.
+ * An NFC tap is a worker verifying they responded, so that one marks it handled.
  */
 export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null> {
   pairingCache.delete(deviceId)
@@ -430,6 +429,13 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
     { resident: residentId },
   )
   const alertId = rows[0] ? String(rows[0].alert_id) : null
+
+  // A worker at the bedside closes the fall; the press below only lowers urgency.
+  if (kind === 'nfc') {
+    if (alertId) await handleAlert(alertId, true, by)
+    return { residentId, alertId, acknowledgedBy: by, handled: Boolean(alertId) }
+  }
+
   if (alertId) {
     const at = new Date().toISOString()
     // Show the downgrade straight away; only staff resolving it closes the alert
@@ -444,7 +450,7 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
     await saveAck(alertId, at, by)
     refreshSoon()
   }
-  return { residentId, alertId, acknowledgedBy: by }
+  return { residentId, alertId, acknowledgedBy: by, handled: false }
 }
 
 /** Fast path: a device reported a fall. Raise the alert straight away. */

@@ -37,7 +37,7 @@ export interface AlertView {
   /** Set when staff resolved it on the dashboard. A device press never sets this. */
   handledAt: string | null
   handledBy: string | null
-  /** Set when the wearer pressed "I'm OK" or tapped a tag: the alert stays open. */
+  /** Set when the wearer pressed "I'm OK": the alert stays open for staff. */
   acknowledgedAt: string | null
   acknowledgedBy: string | null
   /** Falls only: no movement since the fall, not acknowledged, or acknowledged */
@@ -78,9 +78,12 @@ export interface DeviceInfo {
 
 export interface AckResult {
   residentId: string
-  /** The open fall that was downgraded, if there was one */
+  /** The open fall this affected, if there was one */
   alertId: string | null
+  /** "I'm OK button", or the tag a worker used to verify the visit */
   acknowledgedBy: string
+  /** True when the tap resolved the fall: a worker proved they responded */
+  handled: boolean
 }
 
 /**
