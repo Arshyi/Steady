@@ -1,293 +1,150 @@
 # Steady
 
-Steady is a fall-detection wearable and a night-shift dashboard for a care home. The
-wearable tracks movement and detects falls, a small server stores the readings, and
-the dashboard shows who is asleep, who is up, who needs a check — and alerts staff
-the moment someone falls.
+Steady is a fall-detection wearable and a night-shift dashboard for a care home. An
+Arduino UNO Q reads an MPU6050, detects falls on the board, and sends readings over
+USB or Wi-Fi. A Node server stores them, and the dashboard shows who is asleep, who
+is up, and which fall needs a response.
 
-- **Real hardware.** An Arduino UNO Q with an MPU6050 accelerometer and gyroscope.
-- **Real fall detection.** Runs on the board itself, verified with deliberate drops.
-- **Two transports.** USB serial, or Wi-Fi through the App Lab relay.
-- **Simulated supporting cast.** Heart rate, battery, signal and the other residents,
-  so the whole wing looks alive without more hardware.
-
-This is the single README for the project: hardware, firmware, dashboard, server, the
-Cloudflare Worker, and how to run the demo.
-
-## Contents
-
-- [At a glance](#at-a-glance)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [Repository layout](#repository-layout)
-- [Hardware](#hardware)
-- [Fall detection](#fall-detection)
-- [Dashboard](#dashboard)
-- [Server](#server)
-- [Device protocol](#device-protocol)
-- [Wi-Fi relay (App Lab app)](#wi-fi-relay-app-lab-app)
-- [Other firmware builds](#other-firmware-builds)
-- [Cloudflare Worker (web/)](#cloudflare-worker-web)
-- [Build and test](#build-and-test)
-- [Troubleshooting](#troubleshooting)
-- [Known limitations](#known-limitations)
-
-## At a glance
+## Status
 
 | Part | State |
 | --- | --- |
-| MPU6050 accelerometer and gyroscope | **Real**, wired to an Arduino UNO Q |
-| Fall detection | **Real**, runs on the board, verified with drops |
-| Readings → dashboard → alerts | **Real**, over USB serial (Web Serial) |
-| Pairing a device to a resident | **Real** |
-| Wi-Fi relay (`hardware/steady_unoq`) | **Real.** The App Lab app runs on the board, serves the protocol on `:8765`, streams the MPU6050 to the dashboard over the network, and posts one-second summaries to `server/` |
-| Heart rate, battery, signal | Dummy values from each resident's profile |
-| Other residents | Shown only in Simulated mode; live mode lists only residents with a paired wearable |
-| Databricks storage | Implemented, selected by env vars; every run here used the local store |
+| UNO Q + MPU6050 | Real hardware |
+| Fall detection | Runs on the board, tested with drops |
+| Readings, alerts, pairing | Real, over USB or the Wi-Fi relay |
+| Heart rate, battery, signal | Simulated |
+| Databricks store | Implemented, not exercised end to end; the local store is tested |
+
+There is no NFC reader; a worker confirms a response with the button.
 
 ## Quick start
 
-Requirements: Node 20+, and Chrome or Edge for the USB and Bluetooth transports.
+Node 20+, and Chrome or Edge for Web Serial.
 
 ```bash
 npm install
-npm run dev          # dashboard on http://localhost:5173, server on http://localhost:8787
+npm run dev     # dashboard http://localhost:5173, server http://localhost:8787
 ```
 
-No board? Open **Settings** and switch the data source to **Simulated**, or press
-**Try a demo device**. To exercise the ingest path without hardware:
+No board: Settings -> Simulated, or:
 
 ```bash
-npm run sim:device                          # 10 Hz telemetry as ST-UNOQ1, a fall every 45 s
-npm run sim:device -- --fall-every 90 --minutes 5
-npm run relay:mock                          # WebSocket stand-in for the board's relay
+npm run sim:device     # 10 Hz telemetry as ST-UNOQ1, a fall every 45 s
+npm run relay:mock     # WebSocket stand-in for the board relay
 ```
-
-With a board, see [Hardware](#hardware) for the USB path or
-[Wi-Fi relay](#wi-fi-relay-app-lab-app) for the network path.
 
 ## Architecture
 
 ```
-MPU6050 ──I2C──► UNO Q (STM32, Zephyr) ──USB serial──► Dashboard (Vite + React)
-                        │                                     │
-                        │                                     └──HTTP──► server/ ──► local JSON store
-                        │                                                    └──► Databricks
-                        └─ App Lab path: sketch ─Bridge─► python/main.py ─WS 8765─► Dashboard
-                                                              └──HTTP──► server/ + web/
+MPU6050 -> UNO Q -> USB serial -> dashboard (Vite + React)
+                  \-> python/main.py -> WS 8765 -> dashboard
+                                     \-> HTTP -> server/ -> local JSON or Databricks
 
-web/ is a separate Cloudflare Worker + D1: device ingest, server-side fall
-analysis, and the Wi-Fi survey/location store.
+web/ is a separate Cloudflare Worker + D1 for device ingest and surveys.
 ```
 
-The App Lab app publishes `8765` with a `ports:` list in
-`hardware/steady_unoq/app.yaml`; without it the relay listens only inside its Docker
-container and nothing on the network can reach it.
-
-The browser connection (USB or Wi-Fi) is for setup and diagnostics: one device, one
-screen. A whole wing runs through the server and the datastore.
-
-## Repository layout
-
-| Path | What it is |
-| --- | --- |
-| `src/` | Dashboard: pages, components, hardware transports, protocol |
-| `server/` | Node backend: ingest, readings, alerts, pairings; local or Databricks store |
-| `arduino/steady_mpu6050/` | The sketch used for the USB demo (UNO Q + MPU6050, fall detection) |
-| `hardware/steady_unoq/` | App Lab app: STM32 sketch + Python relay over WebSocket |
-| `firmware/steady/` | RTOS-flavoured UNO Q app: threaded sampler, waveform per fall, offline spool |
-| `hardware/steady_wearable/` | Original Nano 33 BLE firmware |
-| `web/` | Cloudflare Worker + D1: ingest, fall analysis, survey store |
-| `hardware/HANDOFF.md` | Background, open decisions and the BLE characteristics |
+The browser connection handles one device for setup and diagnostics. A whole wing
+runs through `server/`.
 
 ## Hardware
 
-### Wiring the MPU6050
+### MPU6050
 
-```
-MPU6050 breakout      Arduino UNO Q
-  VCC   ────────────  3V3      (3.3 V logic; do not feed 5 V into SDA/SCL)
-  GND   ────────────  GND
-  SDA   ────────────  SDA (D20)   or  A4
-  SCL   ────────────  SCL (D21)   or  A5
-  AD0   ────────────  GND      (address 0x68; 0x69 if tied high)
-```
-
-`XDA`, `XCL` and `INT` are unused: the sketch polls at 200 Hz and never needs the
-interrupt pin.
-
-### I2C buses on the UNO Q
-
-The board splits I2C across three buses, which is why the wiring is confusing:
-
-| Bus | Pins | In code |
-| --- | --- | --- |
-| Default | SDA/SCL silkscreen (D20/D21) | `Wire` |
-| Qwiic connector | Qwiic | `Wire1` |
-| Secondary | A4/A5 | `Wire2` |
-
-The sketch probes `Wire` and then `Wire2` and keeps whichever answers at `0x68`, so
-either wiring works. It reports the winner in the serial log.
-
-### Wiring the button
-
-The button's two legs go to **D2** and **D4**. No GND wire is needed: the sketch
-drives D4 low and holds D2 up through its pull-up, so a press shorts the two and D2
-reads LOW.
-
-| Button leg | Pin |
+| MPU6050 | UNO Q |
 | --- | --- |
-| A | D2 (pulled up, read) |
-| B | D4 (driven low) |
+| VCC | 3V3, never 5 V on SDA/SCL |
+| GND | GND |
+| SDA | SDA (D20) or A4 |
+| SCL | SCL (D21) or A5 |
+| AD0 | GND, address 0x68 |
 
-Either leg order works - a button is not polarised. The same sketch also runs with
-the old D2-to-GND wiring, because D4 idling low changes nothing.
+A4/A5 are `Wire2`; D20/D21 are `Wire`. The sketch probes both and keeps whichever
+answers at `0x68`. `XDA`, `XCL` and `INT` are unused.
+
+### Button
+
+The button spans D2 and D4: D4 is driven low, D2 is pulled up, and a press shorts
+them. No GND wire is needed.
 
 | Gesture | Result |
 | --- | --- |
-| One press | Worker confirms they responded: the fall drops to the lowest urgency |
+| One press | Worker confirms they responded: the fall drops to the lowest urgency and stays open |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
 
-### How a fall is triaged
+A gesture is decided after 650 ms with no further press; presses are debounced 25 ms.
 
-A fall stays on the Alerts page until a member of staff marks it checked. A worker
-confirming they responded never closes it: it only moves the fall down the list.
+### Fall detection
 
-| Urgency | What happened | Badge on the row |
-| --- | --- | --- |
-| Highest | Fell, and nothing has moved since | No movement since the fall |
-| Middle | Fell, and no worker has confirmed a response | No worker yet |
-| Lowest | Fell, and a worker confirmed they responded | Worker responded |
+The board samples at 200 Hz and decides for itself:
 
-The highest tier wins even after a press: lying still matters more than pressing a
-button. Movement has to come from the device itself, so the demo fill cannot clear
-it. **Mark checked**, pressed by staff on the dashboard, is the only thing that
-removes a fall from the queue.
+- weightless: `|a|` under 0.60 g
+- impact: over 1.8 g within 1.2 s, or over 3.0 g even when landing flat
+- posture change of 40 degrees or more raises confidence
 
-A gesture is decided after 650 ms with no further press, so a single press reports
-shortly after you release rather than instantly. Presses are debounced for 25 ms.
+It prints `F,peak,tilt,confidence`; the dashboard turns that into an alert. Printing
+happens at about 40 Hz, and sampling at that rate is why a drop can be missed. Tune
+thresholds on deliberate drops onto a mat before showing anyone an alert.
 
-D4 is otherwise free, so an add-on can use it; move the button's jumper to another
-free pin if you need D4 for something else.
+### Flashing
 
-### Flash the sketch
-
-1. Open `arduino/steady_mpu6050/steady_mpu6050.ino` in the Arduino IDE.
-2. Install **Arduino_RouterBridge** from the Library Manager. The UNO Q core refuses
-   to compile without it, because `Serial` is routed through the board's Linux side.
-3. Select **Arduino UNO Q** and the port (`USB Serial Device (COM4)` on Windows),
-   then upload. The board flashes over ADB, not the serial port.
-4. Open the Serial Monitor at **115200 baud** and leave the board still for the first
-   second: that is when the gyro zero-rate offset is measured.
-
-From a shell (Arduino IDE 2.x bundles this CLI):
+1. Open `arduino/steady_mpu6050/steady_mpu6050.ino`.
+2. Install **Arduino_RouterBridge** from Library Manager.
+3. Select Arduino UNO Q and upload. It flashes over ADB, not the serial port.
+4. Open Serial Monitor at 115200 baud and leave the board still for the first second
+   so the gyro bias is measured.
 
 ```bash
 arduino-cli compile -b arduino:zephyr:unoq arduino/steady_mpu6050
 arduino-cli upload  -b arduino:zephyr:unoq -p COM4 arduino/steady_mpu6050
 ```
 
-Expected output:
+## Triage
 
-```
-# MPU6050 on SDA/SCL (Wire)
-# gyro bias (raw) 12.0 -4.0 7.0
-I,UNO-MPU1,1.2.0
-M,0.021,-0.004,1.003,0.4,-0.2,0.1
-```
+A fall stays on the Alerts page until a member of staff clicks **Mark checked**. A
+worker pressing the button only moves it down the list.
 
-Lying flat, `az` should be close to `1.000`, `ax`/`ay` near `0`, and the gyro near
-`0` when still. The `#` lines are diagnostics and are ignored by the dashboard. The
-sketch uses ±2 g and ±250 °/s; if you change `REG_ACCEL_CONFIG` or
-`REG_GYRO_CONFIG`, update `ACCEL_LSB_PER_G` and `GYRO_LSB_PER_DPS` to match.
+| Urgency | What happened | Badge |
+| --- | --- | --- |
+| Highest | Fell, nothing moved since | No movement since the fall |
+| Middle | Fell, no worker has confirmed | No worker yet |
+| Lowest | Fell, a worker confirmed they responded | Worker responded |
 
-### Run the USB demo
-
-Open the dashboard's **Settings** screen, choose **Live devices**, click **Connect
-Arduino (USB)**, and pick the board's port (Chrome or Edge only).
-
-The panel should show `UNO-MPU1`, about 40 samples/s (the sketch asks for 50; the
-board's serial bridge adds a few milliseconds per line), with **Accelerometer reads
-gravity** and, once you turn the board, **Gyroscope responds** ticked. Pick a
-resident and press **Pair**: the browser then sends a one-second summary to the
-server, so that room follows the real sensor.
-
-The device id is `UNO-MPU1`; change it in the sketch if you run more than one board.
-
-## Fall detection
-
-The board decides for itself whether a drop was a fall:
-
-- the sensor goes weightless: `|a|` under **0.60 g**
-- then takes a hard impact: over **1.8 g**, within 1.2 s
-- a landing harder than **3.0 g** counts even if the board lands flat
-- a posture change of **40°** or more raises the confidence and is reported
-
-On a fall it prints one line, which the dashboard turns into the alert text:
-
-```
-F,6.0,82,88        peak g, posture change in degrees, confidence
-```
-
-Sampling matters more than the thresholds: the sensor is read at **200 Hz** for
-detection and printed at about **40 Hz**, because a landing spike lasts only a few
-tens of milliseconds and the serial link cannot see that often. Sampling at the
-print rate is why a drop can look like "signals arrive but no fall". `# weightless`
-and `# impact … g` diagnostics appear in the Serial Monitor while tuning, and
-`FALL_COOLDOWN_MS` (5 s) stops one drop from firing repeatedly.
-
-These thresholds are where tuning starts, not where it ends. Test with deliberate
-drops onto a mat before showing anyone a fall alert, and note that a fall only
-reaches the dashboard when the device is paired to a resident.
+The highest tier wins even after a press: lying still matters more than a response.
+Movement must come from the device, so demo fill cannot clear it.
 
 ## Dashboard
 
-Pages: **Home** (the wing at a glance), **Residents**, **Alerts** (sorted by urgency,
-mark checked, Undo), **Settings** (data source, connection, self-test, pairing).
+Pages: Home, Residents, Alerts (urgency order, Mark checked, Undo), Settings (data
+source, connection, self-test, pairing).
 
-**Data sources** in Settings:
+- Simulated: the server generates readings for every resident.
+- Live devices: only paired wearables count; other residents stay hidden.
 
-- **Simulated** — the server generates readings for every resident.
-- **Live devices** — only real wearables count. Residents appear only once a device
-  is paired to them; everyone else stays hidden until then.
-
-With the local store, `DEMO_FILL=1 npm run dev` fills unpaired residents with dummy
-`DEMO-<room>` devices so the wing looks populated around one real sensor.
-
-**Self-test** rows while a device is connected: sending data, accelerometer reads
-gravity, gyroscope responds, fall detection fires.
+`DEMO_FILL=1 npm run dev` fills unpaired residents with dummy `DEMO-<room>` devices.
+Self-test reports sending data, accelerometer reads gravity, gyroscope responds and
+fall detection fires.
 
 ## Server
 
-`server/` is a small Node backend between the dashboard and the store. It creates its
-tables on first start, runs the simulator in **Simulated** mode, serves `/api/state`
-(polled every 3 s), and accepts readings and falls from devices.
+`server/` stores readings, alerts and pairings and serves `/api/state` (polled every
+3 s). Main endpoints:
 
 | Endpoint | Used by |
 | --- | --- |
-| `GET /api/state` | Every screen |
-| `GET /api/devices` | Settings, "devices the server has seen" |
-| `GET /api/v1/health` | Health check, reports the store in use |
-| `POST /api/v1/ingest` | Device batches: `{device, firmware, samples[], events[], heartbeat}` |
-| `POST /api/mode` `{mode}` | Settings, data source |
-| `POST /api/alerts/:id/handle` and `/undo` | Alerts, Acknowledge / Done / Undo |
-| `POST /api/pairings` `{residentId, deviceId, firmware}` | Settings, Pair |
-| `POST /api/readings` | Devices, the relay, or Settings with a device connected |
-| `POST /api/falls` `{deviceId, detail}` | Fast path for a fall |
-| `POST /api/acks` `{deviceId, kind}` | Worker response confirmation |
-| `POST /api/simulate/fall` `{residentId}` | Settings, demo a fall |
+| `GET /api/state`, `/api/devices`, `/api/v1/health` | Dashboard and health checks |
+| `POST /api/v1/ingest` | Device batches |
+| `POST /api/mode`, `/api/pairings`, `/api/readings`, `/api/falls`, `/api/acks` | Settings, devices and the relay |
+| `POST /api/alerts/:id/handle`, `/undo` | Alerts |
+| `POST /api/simulate/fall` | Demo a fall |
 
-Batched ingest folds 10–200 Hz samples into one reading per second, and each event
-raises a fall alert with the peak g and posture change in its detail. If
-`DEVICE_TOKEN` is set, devices must send `Authorization: Bearer <token>`; when it is
-unset the endpoint accepts anyone and the server logs a warning.
-
-`movement` is 0–100: mean gyroscope magnitude in °/s divided by 2, capped at 100.
+Batched ingest folds 10-200 Hz samples into one reading per second. `DEVICE_TOKEN` is
+optional; without it ingest accepts anyone and the server warns. `movement` is 0-100:
+mean gyro magnitude in degrees/second divided by 2, capped at 100.
 
 ### Storage
 
-Configured by `server/.env` (copy `server/.env.example`):
+Copy `server/.env.example` to `server/.env`:
 
 ```
 DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
@@ -297,199 +154,99 @@ PORT=8787
 DEVICE_TOKEN=
 ```
 
-With both Databricks variables set the server uses your Databricks CLI login and the
-tables `residents`, `devices`, `pairings`, `readings`, `alerts` and `app_settings`.
-Without them it uses a local store: data mode, pairings and firmware versions live in
-`server/.data/local.json` (gitignored), readings and alerts in memory. Everything the
-dashboard shows, the ingest endpoint and the simulator behave the same on either
-store.
+With both Databricks variables the server uses Databricks. Without them it uses
+`server/.data/local.json` (gitignored) for mode and pairings, with readings and alerts
+in memory.
 
 ## Device protocol
 
-One text line per message. USB serial, the Wi-Fi relay and the simulators all speak
-it, and the contract lives in `src/hardware/protocol.ts`.
-
-Device to app:
+One text line per message; the contract is `src/hardware/protocol.ts`.
 
 | Line | Meaning |
 | --- | --- |
 | `I,UNO-MPU1,1.2.0` | device id and firmware, every 2 s |
-| `B,87` | battery percent (the UNO Q cannot measure it and sends none) |
-| `M,ax,ay,az,gx,gy,gz` | one sample: accel in g, gyro in °/s |
-| `F,peak,tilt,confidence` | fall confirmed by the board (`F` alone is also valid) |
-| `O` | a worker confirmed they responded (one button press) |
-| `S,5,9` | a survey capture was stored (scans, access points) |
-| `L,103,1,82` | the survey store placed the device in room 103, floor 1, 82% sure |
+| `B,87` | battery percent |
+| `M,ax,ay,az,gx,gy,gz` | accel in g, gyro in degrees/second |
+| `F,peak,tilt,confidence` | fall confirmed; `F` alone is valid |
+| `O` | a worker confirmed they responded |
+| `S,5,9` | survey capture stored |
+| `L,103,1,82` | placed in room 103, floor 1, 82% sure |
 
-App to device: `I?` asks for the info line, `I` blinks the light so staff can find
-the device, `S` captures the current room.
+App to device: `I?` asks for info, `I` blinks the light, `S` captures the room.
 
-## Wi-Fi relay (App Lab app)
+## Wi-Fi relay
 
 `hardware/steady_unoq/` runs the wearable without USB. The STM32 sketch reads the
-MPU6050 and detects falls; the Debian side (`python/main.py`) serves the protocol
-over `ws://0.0.0.0:8765` and posts a one-second summary to `/api/readings`, falls to
-`/api/falls`, and worker responses to `/api/acks`. It also runs survey mode: three
-button presses scan Wi-Fi and post fingerprints to the Worker, and later scans are
-matched to a room and stored as a location. A button across D2 and D4 is supported.
-
-Simulate it without a board:
+MPU6050 and detects falls; `python/main.py` serves the protocol on `ws://0.0.0.0:8765`
+and posts one-second summaries, falls and worker responses to the server. Survey mode
+posts fingerprints to the Worker.
 
 ```bash
 python hardware/steady_unoq/tools/simulator.py --port 8765
 ```
 
-Then connect the dashboard over Wi-Fi to `127.0.0.1`.
+Verified on the real board: `ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1`, streams
+`M,...` at about 48 Hz, and the dashboard connects over Wi-Fi.
 
-### Verified on the board
-
-The UNO Q and the laptop are both on `ubcIoT` (WPA2-Personal from iot.ubc.ca, which
-does not isolate a user's own devices), the app is installed at
-`~/ArduinoApps/steady_unoq`, and the relay publishes `8765`. Verified:
-`ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1` and then streams `M,…` lines sampled
-at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
-`server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
-and gyroscope values. The button has been pressed on the real board: one press posts
-a worker response ack (the server records `acknowledgedBy`) that only lowers the fall's
-urgency, and three presses fire the survey gesture.
-
-Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
-board means the board itself, so uploads go nowhere). `survey_url` is separate and
-can stay empty until the Worker in `web/` is running somewhere the board can reach.
-
-### Two things that are easy to get wrong
-
-- **`ports:` in `app.yaml` takes plain integers** (`ports:` then `- 8765`). The
-  Compose-style `- "8765:8765"` string is rejected with
-  `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int` and
-  the app refuses to start.
-- **A4/A5 on the UNO Q is `Wire2`, not `Wire`.** The pins labelled SDA/SCL are
-  D20/D21 on plain `Wire`. The sketch probes both buses and keeps whichever answers
-  at `0x68`; a sketch that only calls `Wire.begin()` finds no IMU on A4/A5 and
-  silently publishes nothing.
-
-### Autostart after a reboot
-
-The App CLI daemon (`arduino-app-cli.service`) starts at boot, but it does not start
-apps: a board that reboots leaves `:8765` closed until someone runs
-`arduino-app-cli app start` by hand. The `arduino` user's crontab starts the app
-instead, which needs no elevated privileges:
-
-```bash
-crontab -l        # on the board, as arduino; should show:
-@reboot /home/arduino/steady-autostart.sh
-```
-
-`~/steady-autostart.sh` waits for the daemon on `:8800`, runs
-`arduino-app-cli app start /home/arduino/ArduinoApps/steady_unoq`, retries until
-`:8765` answers, and appends to `~/steady-autostart.log`. It exits immediately when
-the relay is already listening, so it is safe to run by hand. The board gives
-`arduino` only a few specific passwordless root commands, and none of them reboot,
-so `adb reboot`, `systemctl reboot` and `reboot` all fail; a power cycle is the only
-way to boot it. Verified by stopping the app, then running the `@reboot` command with
-`env -i` (the environment cron gives it): the relay came back and streamed within
-about 45 seconds. A full power cycle has not been run since this was installed.
-
-### Not yet proven
-
-The survey *scan* cannot work as shipped. Three presses fire the gesture and the
-relay logs `survey: scanning the room…`, then `no Wi-Fi scans came back`: the App Lab
-container has no `nmcli`, no `iw` and no `/run/dbus`, so there is nothing to query
-NetworkManager with. The gesture path is proven; the scanning needs wireless tools
-in the container or a helper on the host side.
-
-The `web/` Worker store was not reachable from the board.
-
-## Other firmware builds
-
-**`firmware/steady/` — RTOS app with waveform capture.** A Zephyr build with a 200 Hz
-sampler thread, a detector thread, an orientation filter, a per-fall waveform ring
-buffer, and a Python uplink that spools to disk while the network is down and replays
-oldest-first. Bridge RPCs expose `steady_status`, `steady_event_meta`,
-`steady_event_chunk`, `steady_event_ack` and `steady_set_thresholds`; configuration
-lives in `sketch/config.h` and `FallConfig`. Host tests need no board:
-`tools/run_host_test.sh` (or `tools\build_host_test.bat` on Windows) compiles the
-detector and runs seven synthetic scenarios, ending with `ALL CHECKS PASSED`.
-
-**`hardware/steady_wearable/` — Nano 33 BLE.** The original firmware: reads its
-onboard IMU 50 times a second, detects falls with a free-fall/impact threshold, and
-speaks the same lines over BLE notify or USB serial.
+- `app.yaml` needs plain integer ports (`- 8765`), not `"8765:8765"`.
+- Set `server_url` to the laptop's LAN address before installing; `127.0.0.1` on the
+  board means the board itself.
+- The `arduino` user's crontab runs `~/steady-autostart.sh` at reboot; App Lab's
+  daemon does not start apps.
+- Survey scanning cannot work inside the App Lab container: no `nmcli`, `iw` or
+  `/run/dbus`. The gesture fires but no scan returns.
 
 ## Cloudflare Worker (web/)
 
-A separate Worker + D1 on port 8788 for device ingest, server-side fall analysis and
-the survey store. It applies `schema.sql` on start, so there is no migration step.
+A separate Worker + D1 on port 8788 for ingest, server-side fall analysis and the
+survey store. It applies `schema.sql` on start.
 
 ```bash
 cd web
-npm run dev                 # http://127.0.0.1:8788 (wrangler)
-npm test                    # node --test: analysis engine + location matcher
+npm run dev
+npm test
 npm run simulate -- --url http://127.0.0.1:8788 --token dev-token --device steady-001 --minutes 30 --fall
 ```
 
-Local secrets go in `web/.dev.vars`: `DEVICE_TOKEN` for devices and `VIEW_KEY` for the
-dashboard's read key. The API covers ingest, health, devices, summary, series, events
-(with waveform and review labels), CSV export, surveys, locate, location and acks.
-Ingest is idempotent per `(device, ts)` and event `uid`, so a device replaying its
-offline spool does not duplicate rows. Retention is 30 days for samples, kept until
-deleted for events.
-
-Room location is mean absolute RSSI distance over shared access points, with two
-required in common; it is room-level, not a position, and confidence drops when only
-a couple of APs overlap.
-
-Deploy with `npx wrangler d1 create steady` (put the id in `wrangler.jsonc`), then
-`npx wrangler secret put DEVICE_TOKEN`, `npx wrangler secret put VIEW_KEY`, and
-`npx wrangler deploy`.
+Local secrets go in `web/.dev.vars`: `DEVICE_TOKEN` and `VIEW_KEY`. Ingest is
+idempotent per `(device, ts)` and event `uid`; samples are kept 30 days, events until
+deleted. Room location is RSSI distance over shared access points, room-level rather
+than a position.
 
 ## Build and test
 
 ```bash
-npm run build                                   # type-checks the dashboard (tsc -b) and bundles it
+npm run build
 arduino-cli compile -b arduino:zephyr:unoq arduino/steady_mpu6050
-cd web && npm test                              # Worker analysis + location tests
-firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
+cd web && npm test
+firmware/steady/tools/run_host_test.sh
 ```
 
 ## Troubleshooting
 
-| Symptom | Cause and fix |
+| Symptom | Fix |
 | --- | --- |
-| `butterfly_recv … failed` on upload | avrdude was aimed at an AVR board. Select **Arduino UNO Q**, not Arduino Uno |
-| `Please install the Arduino_RouterBridge library` | Install it from the Library Manager; the UNO Q core requires it for `Serial` |
-| `adb.exe: device offline` | The board's Linux side is not up. Unplug USB-C, wait five seconds, replug, wait ~30 s |
-| `# MPU6050 not found at 0x68` | Power or wiring. Check 3V3 and GND, swap SDA/SCL, reseat jumpers; the sketch retries every 5 s |
-| `Access to the port 'COM4' is denied` | The Arduino IDE's Serial Monitor, or another tab, holds the port. Close it; the dashboard needs exclusive access |
-| Signals arrive but no fall fires | Sampling too slow to catch the impact spike, or the device is unpaired. This firmware samples at 200 Hz and only forwards falls when paired |
-| Gyro drifts slowly | The bias calibration ran while the board was moving. Reset it and leave it still for a second |
-| `Connect Arduino (USB)` is disabled | The browser has no Web Serial. Use Chrome or Edge on desktop |
-| Nothing reaches the dashboard | The data source must be **Live devices** and the device paired |
-| Board joins Wi-Fi but nothing connects | A captive portal or client isolation. `curl http://captive.apple.com/hotspot-detect.html` on the board returns the portal page; use a network where your own devices see each other |
-| `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int` | `ports:` in `app.yaml` wants bare integers (`- 8765`), not `"8765:8765"` |
-| Relay logs `skipping`/no `M,…` lines, `ss -ltn` has no 8765 | Either `ports:` is missing from `app.yaml` or the sketch found no IMU. `docker logs steady_unoq-main-1` shows which |
-| Button does nothing | It must straddle D2 and D4, and nothing else may be wired to D4. Check the jumper seating and that the pin is not shorted |
-| Readings arrive but the server ignores them | `pair ST-UNOQ1 to a resident` — pair it in Settings → "Wearables reporting in" |
+| `butterfly_recv ... failed` on upload | Select Arduino UNO Q, not Arduino Uno |
+| `Please install the Arduino_RouterBridge library` | Install it from Library Manager |
+| `adb.exe: device offline` | Replug USB-C and wait about 30 s for the Linux side |
+| `# MPU6050 not found at 0x68` | Check 3V3 and GND, swap SDA/SCL, reseat jumpers; it retries every 5 s |
+| `Access to the port 'COM4' is denied` | Close the IDE Serial Monitor or another tab holding the port |
+| Signals arrive but no fall | Sampling too slow, or the device is unpaired |
+| Nothing reaches the dashboard | Set Live devices and pair the device |
+| Relay has no `M,...` lines or no port 8765 | Check `ports:` in `app.yaml` and `docker logs steady_unoq-main-1` |
+| Readings arrive but the server ignores them | Pair `ST-UNOQ1` in Settings |
 
 ## Known limitations
 
-- **No authentication on the dashboard API.** `/api/state`, `/api/mode`,
-  `/api/pairings`, `/api/falls` and `/api/acks` are open to anyone who can reach the
-  server, and `/api/state` contains resident names, rooms and heart rates.
-  `DEVICE_TOKEN` is optional.
-- **This is health data with no retention or export policy** on the server side.
-- **Battery and signal are simulated**; the UNO Q cannot measure a battery.
-- **Fall detection is a threshold, not a certified detector.** It is tuned on drops,
-  not on people; validate before anyone relies on it.
-- **Databricks has not been exercised end to end** in this workspace; the local store
-  has.
-- **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
-- **Survey mode fires but cannot scan** from inside the App Lab container; see
-  [Not yet proven](#not-yet-proven).
-- **The Wi-Fi path runs, but only what was exercised is proven.** Wi-Fi join, the
-  relay on `:8765`, live readings to the dashboard, server summaries and pairing have
-  all run on the real board. See [Not yet proven](#not-yet-proven) for what has not.
-- `web/` echoes any CORS origin, and `DEVICE_TOKEN` is shared by all devices. Restrict
-  the origin and move to per-device tokens before deploying.
+- Auth is optional. Without Auth0 configured, the dashboard API accepts anyone and
+  `/api/state` exposes names, rooms and heart rates. `DEVICE_TOKEN` is optional too.
+- No retention or export policy for server-side health data.
+- Battery and signal are simulated; the UNO Q cannot measure battery.
+- Fall detection is a threshold, not a certified detector.
+- Databricks has not been exercised end to end here.
+- One device per screen over USB/Wi-Fi; a whole wing needs the relay path.
+- Survey mode fires but cannot scan inside the App Lab container.
+- `web/` echoes any CORS origin and uses one shared `DEVICE_TOKEN`.
 
-Open product decisions (board placement, battery and enclosure, gateway hardware,
-data retention) are tracked in `hardware/HANDOFF.md`.
+Open product decisions (board placement, battery, enclosure, gateway, retention) are
+in `hardware/HANDOFF.md`.
