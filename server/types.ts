@@ -48,6 +48,8 @@ export interface State {
 /** One summarised second of motion from a device, as the dashboard understands it */
 export interface DeviceReading {
   deviceId: string
+  /** Optional: a relay reports the firmware it is running so the row stays current. */
+  firmware?: string | null
   ts?: string
   movement: number
   gyroDps?: number
