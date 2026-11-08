@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { Logo } from '../components/Logo'
+import { useAuth } from '../auth'
 
 // Demo tools: put Steady back to a clean state between demo runs, so pairing a wearable
 // and registering a care home can be shown from the start. The server only accepts these
 // from this computer (see /api/demo in server/index.ts).
 
 interface Status {
-  live: { residents: number; pairings: number; alerts: number; readings: number }
-  accounts: { id: string; email: string; role: string | null; careHome: string | null }[] | null
+  live: { residents: number; pairings: number; alerts: number; readings: number } | null
+  liveError: string | null
+  accounts: { id: string; email: string; role: string | null; careHome: string | null }[]
+  accountsError: string | null
+  login: boolean
   mode: 'simulated' | 'device'
 }
+
+/** Set before signing out of Auth0, so the home page sends you back here afterwards */
+export const DEMO_RESET_FLAG = 'steady-demo-reset'
 
 const card = 'rounded-xl border border-line bg-card p-5'
 const danger =
@@ -28,8 +35,8 @@ async function demoPost(path: string, body: unknown = {}) {
   return data
 }
 
-/** Forget this browser's Auth0 login without a trip to Auth0, since the account is gone */
-function signOutHere() {
+/** Forget this browser's saved Auth0 login (tokens), since the account is gone */
+function forgetSavedLogin() {
   try {
     for (const key of Object.keys(localStorage)) if (key.startsWith('@@auth0spajs@@')) localStorage.removeItem(key)
   } catch {
@@ -40,15 +47,21 @@ function signOutHere() {
 const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`
 
 export function Demo() {
+  const auth = useAuth()
   const [status, setStatus] = useState<Status>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState<'live' | 'accounts' | null>(null)
   const [clearReadings, setClearReadings] = useState(false)
-  const [done, setDone] = useState<string | null>(() =>
-    new URLSearchParams(window.location.search).get('reset') === 'accounts'
-      ? 'All accounts deleted, and this browser is signed out.'
-      : null,
-  )
+  const [done, setDone] = useState<string | null>(() => {
+    let flag: string | null = null
+    try {
+      flag = sessionStorage.getItem(DEMO_RESET_FLAG)
+      sessionStorage.removeItem(DEMO_RESET_FLAG)
+    } catch {
+      // Storage blocked
+    }
+    return flag ? `Deleted ${flag}, and signed out of Auth0. Ready to register again.` : null
+  })
 
   const load = useCallback(async () => {
     try {
@@ -91,10 +104,17 @@ export function Demo() {
     setBusy('accounts')
     setError(undefined)
     try {
-      await demoPost('/api/demo/reset-accounts')
-      signOutHere()
-      // Reload so the whole app forgets the old login
-      window.location.assign('/demo?reset=accounts')
+      const { deleted } = await demoPost('/api/demo/reset-accounts')
+      forgetSavedLogin()
+      try {
+        sessionStorage.setItem(DEMO_RESET_FLAG, plural(deleted, 'account'))
+      } catch {
+        // Storage blocked: the message just won't show
+      }
+      // Sign out of Auth0 itself too, so its login page doesn't remember the deleted account.
+      // Auth0 sends us back to the home page, which forwards here.
+      if (auth.enabled) auth.logout()
+      else window.location.assign('/demo')
     } catch (e) {
       setError((e as Error).message)
       setBusy(null)
@@ -102,7 +122,7 @@ export function Demo() {
   }
 
   const live = status?.live
-  const accounts = status?.accounts
+  const accounts = status ? (status.login ? status.accounts : null) : undefined
 
   return (
     <div className="min-h-screen">
@@ -133,6 +153,11 @@ export function Demo() {
             Removes the residents you added, every wearable pairing and all live alerts. Simulated residents and their
             data stay as they are. Wearables that are still sending show up again under Settings, unpaired.
           </p>
+          {status?.liveError && (
+            <p className="mt-3 text-sm text-check">
+              Couldn’t read live data: {status.liveError}. Resetting may still work; try again in a moment.
+            </p>
+          )}
           <dl className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
             {[
               ['Residents added', live?.residents],
@@ -166,6 +191,7 @@ export function Demo() {
             Deletes every login in Auth0, so registering a care home and inviting staff can be shown again. This browser is
             signed out too.
           </p>
+          {status?.accountsError && <p className="mt-3 text-sm text-fall">Couldn’t list accounts: {status.accountsError}</p>}
           {accounts === null ? (
             <p className="mt-4 text-sm text-fg-2">Login is turned off on this server, so there are no accounts.</p>
           ) : (

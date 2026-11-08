@@ -171,9 +171,19 @@ const server = createServer(async (req, res) => {
       if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from))
         return send(res, 403, { error: 'Demo tools only work on the computer running the server' })
       if (req.method === 'GET' && path === '/api/demo/status') {
+        // Each part on its own, so a slow Databricks can't hold up the account list
+        const within = <T,>(p: Promise<T>, ms: number) =>
+          Promise.race([p, new Promise<T>((_, no) => setTimeout(() => no(new Error('Databricks is slow to answer')), ms))])
+        const [live, accounts] = await Promise.allSettled([
+          within(backend.liveCounts(), 20_000),
+          authEnabled ? listAccounts() : Promise.resolve(null),
+        ])
         return send(res, 200, {
-          live: await backend.liveCounts(),
-          accounts: authEnabled ? await listAccounts() : null,
+          live: live.status === 'fulfilled' ? live.value : null,
+          liveError: live.status === 'rejected' ? (live.reason as Error).message : null,
+          accounts: accounts.status === 'fulfilled' ? accounts.value : [],
+          accountsError: accounts.status === 'rejected' ? (accounts.reason as Error).message : null,
+          login: authEnabled,
           mode: backend.getState().mode,
         })
       }

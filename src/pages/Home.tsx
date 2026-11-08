@@ -1,6 +1,8 @@
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { Logo } from '../components/Logo'
+import { useEffect } from 'react'
 import { useAuth, friendly } from '../auth'
+import { DEMO_RESET_FLAG } from './Demo'
 import { AlertRow, ResidentList } from '../components/board'
 import { sampleResidents, shift, byUrgency } from '../data/residents'
 import { sampleFall } from '../data/alerts'
@@ -65,6 +67,15 @@ function StaffLogin({ className, children }: { className: string; children: stri
 export function Home() {
   // Auth0 sends login errors back to this page
   const { error } = useAuth()
+  const navigate = useNavigate()
+  // Coming back from the Auth0 sign-out that the demo page's account reset starts
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(DEMO_RESET_FLAG)) navigate('/demo', { replace: true })
+    } catch {
+      // Storage blocked
+    }
+  }, [navigate])
   return (
     <div className="min-h-screen">
       {error && (

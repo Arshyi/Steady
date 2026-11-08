@@ -20,7 +20,7 @@ let cached: { token: string; expires: number } | undefined
 async function token(): Promise<string> {
   if (!configured) throw new Error('Set DATABRICKS_HOST and DATABRICKS_WAREHOUSE_ID in server/.env (see server/.env.example)')
   if (cached && Date.now() < cached.expires - 60_000) return cached.token
-  const { stdout } = await run('databricks', ['auth', 'token', '--host', HOST, '-o', 'json'])
+  const { stdout } = await run('databricks', ['auth', 'token', '--host', HOST, '-o', 'json'], { timeout: 30_000 })
   const d = JSON.parse(stdout) as { access_token: string; expiry: string }
   cached = { token: d.access_token, expires: new Date(d.expiry).getTime() }
   return cached.token
@@ -30,12 +30,24 @@ async function token(): Promise<string> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Json = any
 
+// Every request gets a time limit. Without one, a connection that died (the laptop
+// changing Wi-Fi, say) left requests waiting forever and froze the whole server.
+const REQUEST_TIMEOUT_MS = 45_000
+const STATEMENT_DEADLINE_MS = 120_000
+
 async function call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Json> {
-  const res = await fetch(HOST + path, {
-    method,
-    headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  let res: Response
+  try {
+    res = await fetch(HOST + path, {
+      method,
+      headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (e) {
+    if ((e as Error).name === 'TimeoutError') throw new Error(`Databricks didn't answer within ${REQUEST_TIMEOUT_MS / 1000} s`)
+    throw e
+  }
   const json: Json = await res.json()
   if (!res.ok) throw new Error(json.message ?? `Databricks ${res.status}`)
   return json
@@ -64,7 +76,12 @@ export async function sql(statement: string, params: Record<string, string | num
   })
 
   // A stopped warehouse takes a little while to start
+  const deadline = Date.now() + STATEMENT_DEADLINE_MS
   while (res.status.state === 'PENDING' || res.status.state === 'RUNNING') {
+    if (Date.now() > deadline) {
+      call('POST', `/api/2.0/sql/statements/${res.statement_id}/cancel`).catch(() => {})
+      throw new Error(`Databricks statement still running after ${STATEMENT_DEADLINE_MS / 1000} s`)
+    }
     await sleep(500)
     res = await call('GET', `/api/2.0/sql/statements/${res.statement_id}`)
   }
