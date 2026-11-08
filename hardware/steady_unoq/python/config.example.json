@@ -1,0 +1,5 @@
+{
+  "_comment": "Copy to config.json in this folder (git-ignored) and set server_url to the laptop running `npm run dev`: its address on the same Wi-Fi as the board, port 8787.",
+  "server_url": "http://192.168.1.20:8787",
+  "device_id": "ST-UNOQ1"
+}

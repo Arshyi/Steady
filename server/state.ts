@@ -1,6 +1,7 @@
 // Reads Databricks every few seconds, works out each resident's status, raises alerts,
 // and keeps the result in memory so the web app can poll it cheaply.
 
+import { randomUUID } from 'node:crypto'
 import { sql, lit, SCHEMA, type Row } from './databricks.ts'
 import { loadMode, saveMode, insertAlerts, setupSchema } from './schema.ts'
 import { startSimulator, stopSimulator, setFallen, backfillIfNeeded, simulateFall } from './simulator.ts'
@@ -74,7 +75,7 @@ async function refresh() {
          FROM win GROUP BY resident_id),
        paired AS (
          SELECT * FROM ${SCHEMA}.pairings QUALIFY row_number() OVER (PARTITION BY resident_id ORDER BY paired_at DESC) = 1)
-       SELECT r.resident_id, r.name, r.room,
+       SELECT r.resident_id, r.name, r.room, r.sim_device_id IS NULL AS manual,
               CASE WHEN :source = 'simulated' THEN r.sim_device_id ELSE p.device_id END AS device_id,
               l.ts AS last_ts, l.heart_rate, l.battery, l.rssi,
               s.last_moved, s.first_seen, s.hr_min, s.hr_max, s.avg20, s.n20, d.firmware
@@ -157,7 +158,8 @@ async function refresh() {
     return {
       id,
       name: String(r.name),
-      room: String(r.room),
+      room: String(r.room ?? ''),
+      manual: String(r.manual) === 'true',
       status,
       note,
       lastMovementMin: sinceMoved === null ? null : Math.floor(sinceMoved),
@@ -425,20 +427,19 @@ export async function acknowledgeDevice(deviceId: string): Promise<AckResult | n
   const alertId = rows[0] ? String(rows[0].alert_id) : null
 
   if (alertId) {
-    const at = new Date().toISOString()
-    // Show the downgrade straight away; only staff resolving it closes the alert
-    state = {
-      ...state,
-      alerts: state.alerts.map((a) =>
-        a.id === alertId
-          ? { ...a, acknowledgedAt: at, acknowledgedBy: by, urgency: a.urgency === 'critical' ? 'critical' : 'watch' }
-          : a,
-      ),
-    }
-    await saveAck(alertId, at, by)
-    refreshSoon()
+    // The wearer saying they're OK resolves the fall: it moves to Handled, "via I'm OK button"
+    await saveAck(alertId, new Date().toISOString(), by)
+    await handleAlert(alertId, true, by)
   }
   return { residentId, alertId, acknowledgedBy: by }
+}
+
+/** A resident added from Settings, to pair a real wearable to. No simulated device. */
+export async function addResident(name: string, room: string | null) {
+  const id = `r-${randomUUID().slice(0, 8)}`
+  await sql(`INSERT INTO ${SCHEMA}.residents VALUES (:id, :name, :room, NULL)`, { id, name, room: room ?? '' })
+  refreshSoon()
+  return { id, name, room: room ?? '' }
 }
 
 /** Fast path: a device reported a fall. Raise the alert straight away. */

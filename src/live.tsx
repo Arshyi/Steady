@@ -29,6 +29,8 @@ interface Live extends ApiState {
   handle: (alertId: string) => Promise<void>
   undo: (alertId: string) => Promise<void>
   pair: (residentId: string, deviceId: string, firmware?: string) => Promise<void>
+  /** Add a resident to pair a real wearable to; returns their id */
+  addResident: (name: string, room: string) => Promise<string>
   setMode: (mode: DataMode) => Promise<void>
   simulateFall: (residentId: string) => Promise<void>
 }
@@ -108,19 +110,31 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     load()
   }
 
-  // Live mode only shows residents wearing a paired device; the rest are demo residents
-  const residents = data.mode === 'device' ? data.residents.filter((r) => r.device) : data.residents
+  // Live mode is only for residents staff added for real wearables; the built-in demo
+  // residents belong to simulated mode. Either way, only residents wearing a device show.
+  const live = data.mode === 'device'
+  const ofMode = data.residents.filter((r) => Boolean(r.manual) === live)
+  const residents = ofMode.filter((r) => r.device)
+  const inMode = new Set(ofMode.map((r) => r.id))
+  const alerts = data.alerts.filter((a) => inMode.has(a.residentId))
 
   const value: Live = {
     ...data,
     residents,
-    allResidents: data.residents,
+    alerts,
+    // Who a wearable can be paired to: only residents added by staff
+    allResidents: data.residents.filter((r) => r.manual),
     loading: !loaded,
     offline,
-    active: data.alerts.filter((a) => !a.handledAt),
+    active: alerts.filter((a) => !a.handledAt),
     findResident: (id) => data.residents.find((r) => r.id === id),
     handle: (id) => setAlert(id, true),
     undo: (id) => setAlert(id, false),
+    addResident: async (name, room) => {
+      const { id } = await post('/api/residents', { name, room })
+      load()
+      return id as string
+    },
     pair: async (residentId, deviceId, firmware) => {
       await post('/api/pairings', { residentId, deviceId, firmware })
       load()
