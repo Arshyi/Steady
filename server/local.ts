@@ -321,6 +321,7 @@ function refresh() {
       id: row.id,
       name: row.name,
       room: row.room,
+      manual: !row.simDevice,
       status,
       note,
       lastMovementMin: sinceMoved === null ? null : Math.floor(sinceMoved),

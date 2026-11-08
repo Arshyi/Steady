@@ -168,10 +168,16 @@ def _parse_motion(line: str) -> dict | None:
 
 
 def _parse_fall(line: str) -> dict | None:
-    values = _numbers(line, 3)
+    # "ms,peak_g,freefall_ms,tilt_deg"; older sketches send the first three only
+    values = _numbers(line, 4) or _numbers(line, 3)
     if not values:
         return None
-    return {"t": int(values[0]), "peak": values[1], "freefall_ms": int(values[2])}
+    return {
+        "t": int(values[0]),
+        "peak": values[1],
+        "freefall_ms": int(values[2]),
+        "tilt": values[3] if len(values) > 3 else None,
+    }
 
 
 def _parse_ok(line: str) -> dict | None:
@@ -432,8 +438,11 @@ def loop() -> None:
             continue
         _broadcast("F")
         # Fast path: straight to the server, like the mock relay
-        _to_server("/api/falls", {"deviceId": CONFIG["device_id"]})
-        print(f"[steady] fall detected, peak {fall['peak']:.2f} g")
+        detail = {"peakG": fall["peak"]}
+        if fall["tilt"] is not None:
+            detail["tiltDelta"] = fall["tilt"]
+        _to_server("/api/falls", {"deviceId": CONFIG["device_id"], "detail": detail})
+        print(f"[steady] fall detected, peak {fall['peak']:.2f} g, posture change {fall['tilt'] or 0:.0f} deg")
 
     while _oks:
         ok = _parse_ok(_oks.popleft())

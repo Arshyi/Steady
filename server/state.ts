@@ -75,7 +75,7 @@ async function refresh() {
          FROM win GROUP BY resident_id),
        paired AS (
          SELECT * FROM ${SCHEMA}.pairings QUALIFY row_number() OVER (PARTITION BY resident_id ORDER BY paired_at DESC) = 1)
-       SELECT r.resident_id, r.name, r.room,
+       SELECT r.resident_id, r.name, r.room, r.sim_device_id IS NULL AS manual,
               CASE WHEN :source = 'simulated' THEN r.sim_device_id ELSE p.device_id END AS device_id,
               l.ts AS last_ts, l.heart_rate, l.battery, l.rssi,
               s.last_moved, s.first_seen, s.hr_min, s.hr_max, s.avg20, s.n20, d.firmware
@@ -158,7 +158,8 @@ async function refresh() {
     return {
       id,
       name: String(r.name),
-      room: String(r.room),
+      room: String(r.room ?? ''),
+      manual: String(r.manual) === 'true',
       status,
       note,
       lastMovementMin: sinceMoved === null ? null : Math.floor(sinceMoved),

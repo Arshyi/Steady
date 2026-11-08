@@ -110,17 +110,23 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     load()
   }
 
-  // Only residents wearing a device show: in live mode that means a paired wearable, and
-  // residents added for real wearables never show in simulated mode
-  const residents = data.residents.filter((r) => r.device)
+  // Live mode is only for residents staff added for real wearables; the built-in demo
+  // residents belong to simulated mode. Either way, only residents wearing a device show.
+  const live = data.mode === 'device'
+  const ofMode = data.residents.filter((r) => Boolean(r.manual) === live)
+  const residents = ofMode.filter((r) => r.device)
+  const inMode = new Set(ofMode.map((r) => r.id))
+  const alerts = data.alerts.filter((a) => inMode.has(a.residentId))
 
   const value: Live = {
     ...data,
     residents,
-    allResidents: data.residents,
+    alerts,
+    // Who a wearable can be paired to: only residents added by staff
+    allResidents: data.residents.filter((r) => r.manual),
     loading: !loaded,
     offline,
-    active: data.alerts.filter((a) => !a.handledAt),
+    active: alerts.filter((a) => !a.handledAt),
     findResident: (id) => data.residents.find((r) => r.id === id),
     handle: (id) => setAlert(id, true),
     undo: (id) => setAlert(id, false),
