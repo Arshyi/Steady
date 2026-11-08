@@ -314,6 +314,11 @@ export async function listAccounts(): Promise<{ id: string; email: string; role:
     }
     if (users.length < 100) break
   }
+  // Auth0's search takes a few seconds to list a new account: add ones created here just now
+  for (const [id, r] of recent) {
+    if (r.staff && !out.some((a) => a.id === id))
+      out.push({ id, email: r.staff.email, role: r.staff.role, careHome: r.staff.careHomeName || null })
+  }
   return out
 }
 
