@@ -34,8 +34,9 @@ const SIM_EVERY_MS = 5000
 const DEMO_EVERY_MS = 3000
 
 // Demo mode for the Arduino accelerometer branch: one real sensor, everything
-// else made up. On by default in the local store; DEMO_FILL=0 turns it off.
-const DEMO_FILL = process.env.DEMO_FILL !== '0'
+// else made up. Off by default, because live mode only shows residents with a real
+// paired wearable; DEMO_FILL=1 turns it back on.
+const DEMO_FILL = process.env.DEMO_FILL === '1'
 const virtualDevice = (row: { room: string }) => `DEMO-${row.room}`
 
 type Source = 'device' | 'simulated'

@@ -42,7 +42,7 @@ Cloudflare Worker, and how to run the demo.
 | Pairing a device to a resident | **Real** |
 | Wi-Fi relay (`hardware/steady_unoq`) | **Real.** The App Lab app runs on the board, serves the protocol on `:8765`, streams the MPU6050 to the dashboard over the network, and posts one-second summaries to `server/` |
 | Heart rate, battery, signal | Dummy values from each resident's profile |
-| Other residents | Dummy `DEMO-<room>` stream so the wing looks awake |
+| Other residents | Shown only in Simulated mode; live mode lists only residents with a paired wearable |
 | Databricks storage | Implemented, selected by env vars; every run here used the local store |
 
 ## Quick start
@@ -233,13 +233,11 @@ Undo), **Settings** (data source, connection, self-test, pairing).
 **Data sources** in Settings:
 
 - **Simulated** — the server generates readings for every resident.
-- **Live devices** — only real wearables count. Pair a device and its readings go to
-  the store. Unpaired residents are filled with dummy `DEMO-<room>` devices so the
-  wing still looks populated; a real device also gets dummy heart rate, battery and
-  signal so its row is not half empty.
+- **Live devices** — only real wearables count. Residents appear only once a device
+  is paired to them; everyone else stays hidden until then.
 
-Turn the dummy fill off with `DEMO_FILL=0 npm run dev` to see only what hardware
-actually sends (unpaired residents then go dark).
+With the local store, `DEMO_FILL=1 npm run dev` fills unpaired residents with dummy
+`DEMO-<room>` devices so the wing looks populated around one real sensor.
 
 **Self-test** rows while a device is connected: sending data, accelerometer reads
 gravity, gyroscope responds, fall detection fires.

@@ -146,8 +146,22 @@ function ResidentDetail({ r }: { r: Resident }) {
 
 export function Residents() {
   const { id } = useParams()
-  const { residents, findResident } = useLive()
-  const selected = id ? findResident(id) : [...residents].sort(byRoom)[0]
+  const { residents, findResident, mode } = useLive()
+  const selected = id ? residents.find((r) => r.id === id) ?? (mode === 'device' ? undefined : findResident(id)) : [...residents].sort(byRoom)[0]
+
+  if (mode === 'device' && residents.length === 0)
+    return (
+      <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-8">
+        <h2 className="text-base font-medium">Residents</h2>
+        <p className="mt-2 max-w-md text-sm text-fg-2">
+          No wearables are paired yet. In live mode, residents appear once a device is paired to them in{' '}
+          <Link to="/settings" className="text-fg underline underline-offset-2">
+            Settings
+          </Link>
+          .
+        </p>
+      </div>
+    )
 
   return (
     <div className="mx-auto max-w-[1440px] px-4 py-8 sm:px-8">
