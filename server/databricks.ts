@@ -32,22 +32,30 @@ type Json = any
 
 // Every request gets a time limit. Without one, a connection that died (the laptop
 // changing Wi-Fi, say) left requests waiting forever and froze the whole server.
-const REQUEST_TIMEOUT_MS = 45_000
+// A timed-out request is retried: aborting it drops that dead connection, so the
+// retry opens a fresh one, and the server recovers by itself after a network change.
+const REQUEST_TIMEOUTS_MS = [15_000, 15_000, 30_000]
 const STATEMENT_DEADLINE_MS = 120_000
 
 async function call(method: 'GET' | 'POST', path: string, body?: unknown): Promise<Json> {
-  let res: Response
-  try {
-    res = await fetch(HOST + path, {
-      method,
-      headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    })
-  } catch (e) {
-    if ((e as Error).name === 'TimeoutError') throw new Error(`Databricks didn't answer within ${REQUEST_TIMEOUT_MS / 1000} s`)
-    throw e
+  let res: Response | undefined
+  for (const [attempt, timeout] of REQUEST_TIMEOUTS_MS.entries()) {
+    try {
+      res = await fetch(HOST + path, {
+        method,
+        headers: { Authorization: `Bearer ${await token()}`, 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeout),
+      })
+      break
+    } catch (e) {
+      const dead = (e as Error).name === 'TimeoutError' || (e as Error).message === 'fetch failed'
+      if (!dead || attempt === REQUEST_TIMEOUTS_MS.length - 1)
+        throw dead ? new Error('Databricks isn’t answering. Check this laptop’s internet connection.') : e
+      console.warn(`[databricks] no answer on ${method} ${path.split('?')[0]}, retrying on a fresh connection`)
+    }
   }
+  if (!res) throw new Error('Databricks isn’t answering')
   const json: Json = await res.json()
   if (!res.ok) throw new Error(json.message ?? `Databricks ${res.status}`)
   return json
