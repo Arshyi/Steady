@@ -145,25 +145,25 @@ the old D2-to-GND wiring, because D4 idling low changes nothing.
 
 | Gesture | Result |
 | --- | --- |
-| One press | "I'm OK": the fall drops to the lowest urgency and still needs a visit |
+| One press | "I'm OK": lowers the open fall to the lowest urgency; it still needs a visit |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
 
 ### How a fall is triaged
 
-A fall stays on the Alerts page until a member of staff marks it checked. Pressing
-"I'm OK" never closes it: it only moves the fall down the list.
+A fall stays on the Alerts page until a member of staff clicks **Mark checked**. The
+wearer pressing "I'm OK" only lowers its urgency; it never moves the fall to
+*Handled tonight*.
+
+While a fall is open it is ranked:
 
 | Urgency | What happened | Badge on the row |
 | --- | --- | --- |
 | Highest | Fell, and nothing has moved since | No movement since the fall |
-| Middle | Fell, and no "I'm OK" press | Not acknowledged yet |
-| Lowest | Fell, and the wearer pressed "I'm OK" | Says they’re OK |
+| Middle | Fell, still waiting for a response | Not acknowledged yet |
 
-The highest tier wins even after a press: lying still matters more than pressing a
-button. Movement has to come from the device itself, so the demo fill cannot clear
-it. **Mark checked**, pressed by staff on the dashboard, is the only thing that
-removes a fall from the queue.
+Movement has to come from the device itself, so the demo fill cannot clear the
+highest tier.
 
 A gesture is decided after 650 ms with no further press, so a single press reports
 shortly after you release rather than instantly. Presses are debounced for 25 ms.
@@ -199,7 +199,7 @@ M,0.021,-0.004,1.003,0.4,-0.2,0.1
 
 Lying flat, `az` should be close to `1.000`, `ax`/`ay` near `0`, and the gyro near
 `0` when still. The `#` lines are diagnostics and are ignored by the dashboard. The
-sketch uses ±2 g and ±250 °/s; if you change `REG_ACCEL_CONFIG` or
+sketch uses ±8 g and ±250 °/s (±2 g clipped hard landings); if you change `REG_ACCEL_CONFIG` or
 `REG_GYRO_CONFIG`, update `ACCEL_LSB_PER_G` and `GYRO_LSB_PER_DPS` to match.
 
 ### Run the USB demo
@@ -350,12 +350,21 @@ does not isolate a user's own devices), the app is installed at
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
 and gyroscope values. The button has been pressed on the real board: one press posts
-an "I'm OK" ack (the server records `acknowledgedBy`) that only lowers the fall's
-urgency, and three presses fire the survey gesture.
+an "I'm OK" ack, which lowers the fall's urgency without closing it, and three presses fire
+the survey gesture.
 
-Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
-board means the board itself, so uploads go nowhere). `survey_url` is separate and
-can stay empty until the Worker in `web/` is running somewhere the board can reach.
+Set the server address before installing: copy `python/config.example.json` to
+`python/config.json` (git-ignored, so each laptop keeps its own) and set
+`server_url` to the laptop's address on the board's Wi-Fi, port 8787, e.g.
+`http://10.200.3.118:8787`. `127.0.0.1` on the board means the board itself, so
+uploads go nowhere. The relay prints the address it uses when it starts.
+`STEADY_SERVER_URL` overrides the file. `survey_url` is separate and can stay empty
+until the Worker in `web/` is running somewhere the board can reach.
+
+If the server runs inside WSL, the board can't reach it on WSL's private address.
+Turn on mirrored networking (`[wsl2]` / `networkingMode=mirrored` in
+`%UserProfile%\.wslconfig`, then `wsl --shutdown`) and allow port 8787 through the
+Windows firewall.
 
 ### Two things that are easy to get wrong
 

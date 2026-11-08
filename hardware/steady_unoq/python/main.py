@@ -59,9 +59,10 @@ CONFIG = {
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,
-    # The Databricks backend (server/). Leave empty to send readings nowhere.
-    #   "server_url": "http://192.168.1.20:8787"
-    "server_url": "http://10.200.3.118:8787",
+    # The Steady server on the laptop running `npm run dev`, e.g.
+    # "http://192.168.1.20:8787". Set it in config.json (see config.example.json),
+    # not here: it differs per laptop and network. Empty sends readings nowhere.
+    "server_url": "",
     # The survey store (web/). Needs the view key from web/.dev.vars.
     "survey_url": "",
     "survey_key": "dev-view-key",
@@ -71,6 +72,31 @@ CONFIG = {
     # Scan and match every N seconds (0 = only when a survey is taken)
     "locate_every_s": 0,
 }
+
+
+def _load_local_config() -> None:
+    """Per-laptop settings: config.json next to this file (git-ignored), then
+    STEADY_SERVER_URL. Anything in config.json overrides the defaults above."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(path) as f:
+            local = json.load(f)
+        CONFIG.update({k: v for k, v in local.items() if not k.startswith("_")})
+        print(f"[steady] loaded {path}")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as exc:
+        print(f"[steady] ignoring {path}: {exc}")
+    if os.environ.get("STEADY_SERVER_URL"):
+        CONFIG["server_url"] = os.environ["STEADY_SERVER_URL"]
+    CONFIG["server_url"] = str(CONFIG.get("server_url") or "").rstrip("/")
+    if CONFIG["server_url"]:
+        print(f"[steady] sending readings to {CONFIG['server_url']}")
+    else:
+        print("[steady] no server_url set: readings stay on the board (see config.example.json)")
+
+
+_load_local_config()
 
 # ---------------------------------------------------------------------------
 # Bridge handlers (called by the sketch — keep them trivial)
@@ -131,10 +157,16 @@ def _parse_motion(line: str) -> dict | None:
 
 
 def _parse_fall(line: str) -> dict | None:
-    values = _numbers(line, 3)
+    # "ms,peak_g,freefall_ms,tilt_deg"; older sketches send the first three only
+    values = _numbers(line, 4) or _numbers(line, 3)
     if not values:
         return None
-    return {"t": int(values[0]), "peak": values[1], "freefall_ms": int(values[2])}
+    return {
+        "t": int(values[0]),
+        "peak": values[1],
+        "freefall_ms": int(values[2]),
+        "tilt": values[3] if len(values) > 3 else None,
+    }
 
 
 def _parse_ok(line: str) -> dict | None:
@@ -217,6 +249,12 @@ def _summarize(now: float) -> None:
             "movement": min(100.0, gyro_dps / 2),
             "gyroDps": round(gyro_dps, 2),
             "accelG": round(accel_g, 3),
+            # The raw second for the live graph on the resident's page (kept in memory only)
+            "samples": [
+                [s["t"], round(s["ax"], 3), round(s["ay"], 3), round(s["az"], 3),
+                 round(s["gx"], 1), round(s["gy"], 1), round(s["gz"], 1)]
+                for s in batch
+            ],
         },
     )
     if stored is not None and not stored.get("accepted"):
@@ -378,8 +416,11 @@ def loop() -> None:
             continue
         _broadcast("F")
         # Fast path: straight to the server, like the mock relay
-        _to_server("/api/falls", {"deviceId": CONFIG["device_id"]})
-        print(f"[steady] fall detected, peak {fall['peak']:.2f} g")
+        detail = {"peakG": fall["peak"]}
+        if fall["tilt"] is not None:
+            detail["tiltDelta"] = fall["tilt"]
+        _to_server("/api/falls", {"deviceId": CONFIG["device_id"], "detail": detail})
+        print(f"[steady] fall detected, peak {fall['peak']:.2f} g, posture change {fall['tilt'] or 0:.0f} deg")
 
     while _oks:
         ok = _parse_ok(_oks.popleft())
