@@ -1,9 +1,10 @@
-// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), or a built-in demo device.
+// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), an Arduino over USB
+// (serial.ts), or a built-in demo device.
 // Both give the same events, so the Settings page doesn't care which one is used.
 
 import { WIFI_PORT, type MotionSample } from './protocol'
 
-export type Transport = 'wifi' | 'simulated'
+export type Transport = 'wifi' | 'serial' | 'simulated'
 
 /** How a survey capture ended, as reported by the board */
 export interface SurveySummary {
@@ -18,11 +19,18 @@ export interface KnownLocation {
   confidence?: number
 }
 
+/** What the board measured when it fired a fall */
+export interface FallDetail {
+  peakG?: number
+  tiltDelta?: number
+  confidence?: number
+}
+
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
   onBattery: (percent: number) => void
   onMotion: (sample: MotionSample) => void
-  onFall: () => void
+  onFall: (detail?: FallDetail) => void
   onDisconnect: () => void
   /** The wearer pressed the button once: "I'm OK". */
   onOk?: () => void
@@ -41,7 +49,7 @@ export interface Connection {
 }
 
 /** Parse one text line from the device (format in protocol.ts) */
-function handleLine(line: string, ev: DeviceEvents) {
+export function handleLine(line: string, ev: DeviceEvents) {
   const parts = line.split(',')
   switch (parts[0]) {
     case 'I':
@@ -55,9 +63,15 @@ function handleLine(line: string, ev: DeviceEvents) {
       if ([ax, ay, az, gx, gy, gz].every(Number.isFinite)) ev.onMotion({ t: performance.now(), ax, ay, az, gx, gy, gz })
       break
     }
-    case 'F':
-      ev.onFall()
+    case 'F': {
+      const [peak, tilt, confidence] = parts.slice(1).map(Number)
+      ev.onFall({
+        peakG: Number.isFinite(peak) ? peak : undefined,
+        tiltDelta: Number.isFinite(tilt) ? tilt : undefined,
+        confidence: Number.isFinite(confidence) ? confidence : undefined,
+      })
       break
+    }
     case 'O':
       ev.onOk?.()
       break

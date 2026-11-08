@@ -2,7 +2,7 @@
 
 The board is an **Arduino UNO Q, 4 GB RAM / 32 GB eMMC**. Read
 [UNO_Q_SETUP.md](../docs/UNO_Q_SETUP.md) for power, wiring, architecture and
-storage sizing, then the [integrated app guide](steady_unoq/README.md).
+storage sizing, then the [integrated app section of the root README](../README.md#other-firmware-builds).
 
 ## Integration map
 

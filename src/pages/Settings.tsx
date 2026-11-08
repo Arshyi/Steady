@@ -1,20 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
-import { Wifi, Check, Circle, Lightbulb } from 'lucide-react'
+import { Wifi, Check, Circle, Lightbulb, Usb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
-import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
+import { connectWifi, connectSimulated, type Connection, type FallDetail, type Transport } from '../hardware/connection'
 import { createConnectionSession } from '../hardware/connection-session'
+import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
-import { useLive, type DataMode } from '../live'
+import { useLive, post, type DataMode } from '../live'
 
 const LATEST_FIRMWARE = '1.4.2'
 const TRACE_MS = 5000
+const SEND_EVERY_MS = 1000
 
 const transportLabel: Record<Transport, string> = {
   wifi: 'Connected over Wi-Fi',
+  serial: 'Arduino UNO over USB',
   simulated: 'Demo device',
 }
 
@@ -182,6 +185,15 @@ function Reading({ label, value, unit }: { label: string; value?: number; unit: 
   )
 }
 
+/** Movement score 0–100 from gyroscope activity, on the same scale the simulator uses */
+function summarize(samples: MotionSample[]) {
+  const gyro = samples.map((s) => Math.hypot(s.gx, s.gy, s.gz))
+  const accel = samples.map((s) => Math.hypot(s.ax, s.ay, s.az))
+  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
+  const gyroDps = mean(gyro)
+  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel) }
+}
+
 function ConnectPanel() {
   const { mode, residents, pair } = useLive()
   const [conn, setConn] = useState<Connection>()
@@ -190,6 +202,7 @@ function ConnectPanel() {
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [residentId, setResidentId] = useState('')
+  const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
   const [address, setAddress] = useState(savedAddress)
   // "I'm OK", an NFC tap, a survey or a room match, as the board reported it
   const [lastEvent, setLastEvent] = useState<string>()
@@ -197,6 +210,12 @@ function ConnectPanel() {
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
   const buffer = useRef<MotionSample[]>([])
   const devRef = useRef<LiveDevice>(emptyDevice)
+  const lastSent = useRef(0)
+  const modeRef = useRef(mode)
+  modeRef.current = mode
+  // Only a board on USB needs the browser to forward for it. A Wi-Fi board posts its own
+  // readings and falls, and a demo device must never raise real alerts.
+  const forwardRef = useRef(false)
   const session = useRef(createConnectionSession())
 
   useEffect(() => () => {
@@ -212,6 +231,19 @@ function ConnectPanel() {
       devRef.current = { ...devRef.current, rate: lastSecond.length }
       setDev(devRef.current)
       setTrace([...buffer.current])
+
+      // In "Live devices" mode, send a one-second summary to the server (USB boards only)
+      const d = devRef.current
+      if (forwardRef.current && modeRef.current === 'device' && d.id && lastSecond.length && now - lastSent.current >= SEND_EVERY_MS) {
+        lastSent.current = now
+        post('/api/readings', { deviceId: d.id, battery: d.battery ?? null, ...summarize(lastSecond) })
+          .then((r: { accepted: number }) =>
+            setSent((s) =>
+              r.accepted ? { ok: s.ok + 1 } : { ok: s.ok, note: 'Pair this device to a resident to send its readings' },
+            ),
+          )
+          .catch(() => setSent((s) => ({ ok: s.ok, note: 'Can’t reach the server' })))
+      }
     }, 100)
     return () => clearInterval(timer)
   }, [conn])
@@ -221,11 +253,13 @@ function ConnectPanel() {
     const active = attempt.guard
     setError(undefined)
     setBusy(true)
+    setSent({ ok: 0 })
     setLastEvent(undefined)
     buffer.current = []
     devRef.current = { ...emptyDevice }
     setDev(devRef.current)
     const update = (patch: Partial<LiveDevice>) => (devRef.current = { ...devRef.current, ...patch })
+    forwardRef.current = kind === 'serial'
 
     const events = {
       onInfo: active((id: string, firmware: string) => update({ id, firmware })),
@@ -235,8 +269,17 @@ function ConnectPanel() {
         const moved = Math.hypot(s.gx, s.gy, s.gz) > 30
         update({ sample: s, gyroMoved: devRef.current.gyroMoved || moved })
       }),
-      // Real boards send their own falls; demo events stay in this diagnostic view.
-      onFall: active(() => update({ fallSeen: true })),
+      onFall: active((detail?: FallDetail) => {
+        update({ fallSeen: true })
+        // Fast path for a USB board: the fall goes straight to the server, with what the board measured
+        if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
+          post('/api/falls', { deviceId: devRef.current.id, detail }).catch(() => {})
+        const measured = [
+          detail?.peakG !== undefined ? `peak ${detail.peakG.toFixed(1)} g` : null,
+          detail?.tiltDelta !== undefined ? `tilt ${Math.round(detail.tiltDelta)}°` : null,
+        ].filter(Boolean)
+        setLastEvent(measured.length ? `Fall detected · ${measured.join(', ')}` : 'Fall detected')
+      }),
       onOk: active(() => setLastEvent(`"I'm OK" pressed at ${stamp()}`)),
       onTap: active((tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`)),
       onSurvey: active((summary: { scans?: number; accessPoints?: number }) =>
@@ -261,7 +304,10 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      const connected = kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events)
+      const connected =
+        kind === 'wifi' ? await connectWifi(address, events)
+        : kind === 'serial' ? await connectSerial(events)
+        : await connectSimulated(events)
       if (!await attempt.attach(connected)) return
       setConn(connected)
     } catch (e) {
@@ -280,8 +326,8 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable over Wi-Fi to check its sensors are working and pair it to a resident. The board must be
-          on the same network as this computer.
+          Connect a wearable over Wi-Fi, or an Arduino UNO with an MPU6050 over USB, to check its accelerometer and
+          gyroscope and pair it to a resident.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="board-address">
@@ -304,6 +350,14 @@ function ConnectPanel() {
             Connect over Wi-Fi
           </button>
           <button
+            disabled={busy || !serialSupported()}
+            onClick={() => start('serial')}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
+          >
+            <Usb className="h-4 w-4" strokeWidth={1.5} />
+            Connect Arduino (USB)
+          </button>
+          <button
             disabled={busy}
             onClick={() => start('simulated')}
             className="h-10 px-2 text-sm text-fg-2 transition-colors duration-150 hover:text-fg"
@@ -311,6 +365,11 @@ function ConnectPanel() {
             Try a demo device
           </button>
         </div>
+        {!serialSupported() && (
+          <p className="mt-3 text-xs text-fg-3">
+            USB serial needs Chrome or Edge on desktop. Use Wi-Fi or the demo device otherwise.
+          </p>
+        )}
         {error && <p className="mt-3 text-sm text-fall">{error}</p>}
       </section>
     )
@@ -331,7 +390,7 @@ function ConnectPanel() {
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          {conn.transport !== 'simulated' && (
+          {conn.transport === 'wifi' && (
             <button
               onClick={() => conn.identify()}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-raised px-3 text-sm text-fg transition-colors duration-150 hover:bg-page"
@@ -369,7 +428,11 @@ function ConnectPanel() {
           <p className="mt-1 text-xs text-fg-2">
             {conn.transport === 'wifi'
               ? 'The board relay sends readings to the server. Check Last sync below to confirm delivery.'
-              : 'Demo readings and falls stay in this view. Use Simulated data to test dashboard alerts.'}
+              : conn.transport === 'serial'
+                ? mode === 'device'
+                  ? sent.note ?? (sent.ok ? `Sending to the server · ${sent.ok} summaries sent` : 'Sending to the server…')
+                  : 'Not sending to the server. Switch the data source to Live devices to send these readings.'
+                : 'Demo readings and falls stay in this view. Use Simulated data to test dashboard alerts.'}
           </p>
         </div>
 
@@ -411,6 +474,7 @@ function ConnectPanel() {
                 if (!dev.id || conn.transport === 'simulated') return
                 try {
                   await pair(residentId, dev.id, dev.firmware)
+                  setSent({ ok: sent.ok })
                 } catch (e) {
                   setError((e as Error).message)
                 }

@@ -30,15 +30,15 @@ serial application. SSH is available after board/network setup.
 
 ## Choose the matching application
 
-Use [`hardware/steady_unoq/`](../hardware/steady_unoq/README.md) with the root
+Use [`hardware/steady_unoq/`](../README.md#other-firmware-builds) with the root
 `src/` dashboard and `server/` Node/Databricks API. This App Lab app samples an
 external MPU6050 at 50 Hz, passes readings through Bridge, streams diagnostics
 over WebSocket and produces one-second backend summaries. Its survey/location
 features also call the Worker in `web/`.
 
-[`firmware/steady/`](../firmware/steady/README.md) is an alternative 200 Hz
+[`firmware/steady/`](../README.md#other-firmware-builds) is an alternative 200 Hz
 orientation/fall detector with event waveforms, a JSONL outage spool and a
-different ingest API in [`web/`](../web/README.md). Its sketch and Python half
+different ingest API in [`web/`](../README.md#cloudflare-worker-web). Its sketch and Python half
 must stay together. It is not a drop-in replacement for the integrated relay.
 `hardware/steady_wearable/` is older Nano firmware, not the UNO Q application.
 
