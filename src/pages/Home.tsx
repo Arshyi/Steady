@@ -2,8 +2,8 @@ import { Link } from 'react-router'
 import { Logo } from '../components/Logo'
 import { AlertRow, ResidentList } from '../components/board'
 import { Wearable } from '../components/Wearable'
-import { residents, shift, byUrgency } from '../data/residents'
-import { seedAlerts } from '../data/alerts'
+import { sampleResidents, shift, byUrgency } from '../data/residents'
+import { sampleFall } from '../data/alerts'
 
 const measures = [
   { title: 'Movement', text: 'Tracked through the night and shown per half hour, so staff can see who has been restless.' },
@@ -20,8 +20,9 @@ const steps = [
 
 /** A picture of the dashboard. `inert` stops clicks, hovers and keyboard focus inside it. */
 function DashboardPreview() {
-  const fall = seedAlerts.find((a) => a.kind === 'fall')!
-  const rows = [...residents].sort(byUrgency).filter((r) => r.status !== 'fall').slice(0, 4)
+  const fall = sampleFall
+  const dorothy = sampleResidents.find((r) => r.id === fall.residentId)!
+  const rows = [...sampleResidents].sort(byUrgency).filter((r) => r.status !== 'fall').slice(0, 4)
   const noop = () => {}
 
   return (
@@ -35,10 +36,10 @@ function DashboardPreview() {
         <p className="text-sm text-fg">
           Overview <span className="text-fg-3">· {shift.wing}</span>
         </p>
-        <p className="font-mono text-xs tabular-nums text-fg-3">{shift.updatedAt}</p>
+        <p className="font-mono text-xs tabular-nums text-fg-3">02:14</p>
       </div>
       <div className="flex flex-col gap-2">
-        <AlertRow alert={fall} onHandle={noop} onUndo={noop} />
+        <AlertRow alert={fall} resident={dorothy} onHandle={noop} onUndo={noop} />
         <ResidentList residents={rows} compact />
       </div>
     </div>

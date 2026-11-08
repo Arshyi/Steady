@@ -1,21 +1,22 @@
 import { Link } from 'react-router'
 import { ArrowRight } from 'lucide-react'
-import { residents, byUrgency, countByStatus, LOW_BATTERY } from '../data/residents'
+import { byUrgency, countByStatus, LOW_BATTERY } from '../data/residents'
 import { AlertRow, ResidentList } from '../components/board'
 import { Page, PageHeader } from '../components/PageHeader'
 import { WingMap } from '../components/WingMap'
-import { useAlerts } from '../alerts'
+import { useLive } from '../live'
 
 // Overview is the wing at a glance. Only falls show here in full; everything else lives on Alerts.
 export function Overview() {
-  const { alerts, active, handle, undo } = useAlerts()
+  const { residents, alerts, active, handle, undo } = useLive()
   const sorted = [...residents].sort(byUrgency)
   const c = countByStatus(residents)
 
-  const falls = alerts.filter((a) => a.kind === 'fall')
+  const falls = alerts.filter((a) => a.kind === 'fall' && (!a.handledAt || Date.now() - Date.parse(a.handledAt) < 30 * 60_000))
   const otherActive = active.filter((a) => a.kind !== 'fall').length
-  const lowBattery = residents.filter((r) => r.device.battery < LOW_BATTERY).length
-  const weakSignal = residents.filter((r) => r.device.signal === 'weak').length
+  const online = residents.filter((r) => r.device?.lastSyncSec !== null && r.device?.lastSyncSec !== undefined && r.device.lastSyncSec < 120).length
+  const lowBattery = residents.filter((r) => (r.device?.battery ?? 100) < LOW_BATTERY).length
+  const weakSignal = residents.filter((r) => r.device?.signal === 'weak').length
 
   return (
     <Page>
@@ -30,9 +31,10 @@ export function Overview() {
             <span className={c.fall ? 'text-fall' : ''}>
               {c.fall} {c.fall === 1 ? 'fall' : 'falls'}
             </span>
+            {c.offline > 0 && <> · {c.offline} with no data</>}
           </p>
           <p>
-            {residents.length} devices online · {lowBattery} low battery · {weakSignal} weak signal
+            {online} {online === 1 ? 'device' : 'devices'} online · {lowBattery} low battery · {weakSignal} weak signal
           </p>
         </div>
       </PageHeader>
@@ -58,7 +60,7 @@ export function Overview() {
         <h2 id="map-heading" className="mb-3 text-base font-medium">
           Wing map
         </h2>
-        <WingMap />
+        <WingMap residents={residents} />
       </section>
 
       <section aria-labelledby="residents-heading" className="mt-8">

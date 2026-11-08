@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertRow } from '../components/board'
 import { Page, PageHeader } from '../components/PageHeader'
-import { useAlerts } from '../alerts'
+import { useLive } from '../live'
 import type { Alert } from '../data/alerts'
 
 type Filter = 'all' | 'fall' | 'check' | 'device'
@@ -19,16 +19,10 @@ function matches(a: Alert, f: Filter) {
   return a.kind === f
 }
 
-/** Minutes since the shift started at 22:00, so 01:30 sorts after 23:00 */
-function shiftMinutes(time: string) {
-  const [h, m] = time.split(':').map(Number)
-  return (h < 12 ? h + 24 : h) * 60 + m
-}
-
-const newestFirst = (a: Alert, b: Alert) => shiftMinutes(b.time) - shiftMinutes(a.time)
+const newestFirst = (a: Alert, b: Alert) => Date.parse(b.raisedAt) - Date.parse(a.raisedAt)
 
 export function Alerts() {
-  const { alerts, handle, undo } = useAlerts()
+  const { alerts, handle, undo } = useLive()
   const [filter, setFilter] = useState<Filter>('all')
 
   const visible = alerts.filter((a) => matches(a, filter))

@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { NavLink, Link, Outlet } from 'react-router'
+import { NavLink, Link, Outlet, useLocation } from 'react-router'
 import { LayoutList, Bell, Users, Settings, Menu, X, Moon, Sun } from 'lucide-react'
 import { Logo } from './Logo'
 import { useTheme } from '../theme'
-import { useAlerts } from '../alerts'
+import { useLive } from '../live'
 
 const links = [
   { to: '/overview', label: 'Overview', icon: LayoutList },
@@ -20,7 +20,7 @@ const rowClass = ({ isActive }: { isActive: boolean }) =>
   }`
 
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
-  const { active } = useAlerts()
+  const { active } = useLive()
   const hasFall = active.some((a) => a.kind === 'fall')
 
   return (
@@ -51,8 +51,32 @@ function ThemeToggle() {
   )
 }
 
+/** Shown instead of the page while there's no data yet, or when something is broken */
+function Connection() {
+  const { loading, offline, error } = useLive()
+  const problem = offline ?? error
+  if (!problem && !loading) return null
+
+  return (
+    <div className="mx-auto max-w-[1440px] px-4 pt-8 sm:px-8">
+      <div className={`rounded-xl border px-5 py-4 text-sm ${problem ? 'border-check/40 bg-card' : 'border-line bg-card'}`}>
+        {problem ? (
+          <>
+            <p className="font-medium text-check">Not connected to Databricks</p>
+            <p className="mt-1 text-fg-2">{problem}</p>
+          </>
+        ) : (
+          <p className="text-fg-2">Loading from Databricks… the warehouse can take a few seconds to start.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function AppShell() {
   const [open, setOpen] = useState(false)
+  const { loading } = useLive()
+  const { pathname } = useLocation()
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[248px_1fr]">
@@ -92,7 +116,9 @@ export function AppShell() {
       </div>
 
       <main className="min-w-0">
-        <Outlet />
+        <Connection />
+        {/* Settings stays usable while loading so the data source can be changed */}
+        {(!loading || pathname.startsWith('/settings')) && <Outlet />}
       </main>
     </div>
   )
