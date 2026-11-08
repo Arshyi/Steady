@@ -6,7 +6,7 @@ import { sql, lit, SCHEMA, type Row } from './databricks.ts'
 import { loadMode, saveMode, insertAlerts, setupSchema } from './schema.ts'
 import { startSimulator, stopSimulator, setFallen, backfillIfNeeded, simulateFall } from './simulator.ts'
 import { listSeen, touchDevice } from './devices.ts'
-import type { AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status } from './types.ts'
+import type { AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, LiveCounts, Mode, ResidentView, State, Status } from './types.ts'
 
 export type { AlertKind, AlertView, DeviceReading, ResidentView, State, Status } from './types.ts'
 export { simulateFall }
@@ -428,6 +428,30 @@ export async function acknowledgeDevice(deviceId: string): Promise<AckResult | n
 
   if (alertId) await saveAck(alertId, new Date().toISOString(), by)
   return { residentId, alertId, acknowledgedBy: by }
+}
+
+// ---------- Demo tools ----------
+
+export async function liveCounts(): Promise<LiveCounts> {
+  const [row] = await sql(`SELECT
+      (SELECT count(*) FROM ${SCHEMA}.residents WHERE sim_device_id IS NULL) AS residents,
+      (SELECT count(*) FROM ${SCHEMA}.pairings) AS pairings,
+      (SELECT count(*) FROM ${SCHEMA}.alerts WHERE source = 'device') AS alerts,
+      (SELECT count(*) FROM ${SCHEMA}.readings WHERE source = 'device') AS readings`)
+  return { residents: Number(row.residents), pairings: Number(row.pairings), alerts: Number(row.alerts), readings: Number(row.readings) }
+}
+
+/** Back to a clean live mode, so pairing can be shown from the start. Simulated data is untouched. */
+export async function resetLive({ readings }: { readings: boolean }): Promise<LiveCounts> {
+  const before = await liveCounts()
+  await sql(`DELETE FROM ${SCHEMA}.pairings`)
+  await sql(`DELETE FROM ${SCHEMA}.residents WHERE sim_device_id IS NULL`)
+  await sql(`DELETE FROM ${SCHEMA}.alerts WHERE source = 'device'`)
+  if (readings) await sql(`DELETE FROM ${SCHEMA}.readings WHERE source = 'device'`)
+  pairingCache.clear()
+  alertEdits.clear()
+  refreshSoon()
+  return { ...before, readings: readings ? before.readings : 0 }
 }
 
 /** A resident added from Settings, to pair a real wearable to. No simulated device. */

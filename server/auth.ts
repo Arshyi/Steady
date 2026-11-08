@@ -298,3 +298,35 @@ export async function resendInvite(me: Staff, id: string) {
   const staff = await colleague(me, id)
   await sendPasswordEmail(staff.email)
 }
+
+// ---------- demo tools ----------
+
+/** Every login in the Auth0 tenant (demo page) */
+export async function listAccounts(): Promise<{ id: string; email: string; role: string | null; careHome: string | null }[]> {
+  if (!accountsEnabled) return []
+  const out: { id: string; email: string; role: string | null; careHome: string | null }[] = []
+  for (let page = 0; page < 10; page++) {
+    const users: Auth0User[] = (await mgmt('GET', `/users?per_page=100&page=${page}&fields=user_id,email,app_metadata`)) ?? []
+    for (const u of users) {
+      if (recent.get(u.user_id)?.staff === null) continue // deleted a moment ago; search hasn't caught up
+      const s = u.app_metadata?.steady
+      out.push({ id: u.user_id, email: u.email, role: s?.role ?? null, careHome: s?.careHomeName ?? null })
+    }
+    if (users.length < 100) break
+  }
+  return out
+}
+
+/** Delete every login so registering can be shown again (demo page) */
+export async function deleteAllAccounts() {
+  if (!accountsEnabled) throw new HttpError(503, 'Accounts aren’t set up on this server')
+  const accounts = await listAccounts()
+  for (const a of accounts) {
+    await mgmt('DELETE', `/users/${encodeURIComponent(a.id)}`)
+    remember(a.id, a.careHome ?? '', null)
+  }
+  profileCache.clear()
+  registrations.clear()
+  console.log(`[auth] demo reset: deleted ${accounts.length} account(s)`)
+  return { deleted: accounts.length, emails: accounts.map((a) => a.email) }
+}
