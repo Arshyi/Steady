@@ -7,9 +7,9 @@ device.
 | | `steady_wearable/` | `steady_unoq/` |
 | --- | --- | --- |
 | Board | Nano 33 BLE / BLE Sense / 33 IoT / RP2040 Connect | **Arduino UNO Q** |
-| IMU | the board's own (BMI270, LSM9DS1, LSM6DS3, LSM6DSOX) | external **Modulino Movement** (LSM6DSOX) over Qwiic |
+| IMU | the board's own (BMI270, LSM9DS1, LSM6DS3, LSM6DSOX) | external **MPU6050** over I2C |
 | Link to the app | BLE notify, or USB serial text lines | **Wi-Fi/LAN**: sketch → Bridge → Python → WebSocket |
-| Browser side | `connectBluetooth`, `connectUsb` | `connectNetwork` |
+| Browser side | `connectBluetooth`, `connectUsb` | `connectWifi` |
 | Best for | a tablet next to one resident | a device that stays on the care network |
 
 Both speak the contract in `src/hardware/protocol.ts`.
@@ -17,7 +17,9 @@ Both speak the contract in `src/hardware/protocol.ts`.
 ## The UNO Q app
 
 `steady_unoq/` is an Arduino App Lab app, not a single sketch: the STM32 half
-reads the sensor and detects falls, the Debian half serves them over WebSocket.
+reads the MPU6050 and detects falls, the Debian half serves them over WebSocket
+and relays them to the backends in `server/` (readings, falls, acks) and `web/`
+(Wi-Fi fingerprints, location, responder log).
 See `steady_unoq/README.md` for wiring, the Bridge/WebSocket message tables and
 the tuning workflow. Short version:
 
@@ -25,7 +27,7 @@ the tuning workflow. Short version:
 python hardware/steady_unoq/tools/simulator.py --port 8765   # no board needed
 ```
 
-then in the dashboard: **Settings → `ws://127.0.0.1:8765` → Connect over network**.
+then in the dashboard: **Settings → `127.0.0.1` → Connect over Wi-Fi** (port 8765 is assumed).
 
 ## The BLE / USB wearable
 
@@ -74,9 +76,10 @@ wearable --BLE--> gateway in the wing --Wi-Fi--> backend --> Databricks --> web 
   and serves the API the web app reads instead of the placeholder files in
   `src/data/`.
 
-The Python app already has a `forward_url` hook for exactly this: falls are
-posted the moment they happen, samples optionally. Nothing is implemented on the
-backend/Databricks side yet.
+The Python app does exactly this: `server/` is the backend, it keeps readings and
+alerts in Databricks, and the UNO Q relay posts a one-second summary to
+`/api/readings` and every fall to `/api/falls`. Survey mode's fingerprints are
+posted to the separate store in `web/`.
 
 The fall detection in both sketches is a simple threshold. It needs testing and
 tuning with real falls (a crash-test mat, a weighted dummy) before anyone relies

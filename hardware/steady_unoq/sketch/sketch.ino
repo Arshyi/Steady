@@ -1,9 +1,10 @@
 // Steady wearable — Arduino UNO Q (STM32U585, Zephyr core)
 //
-// Reads the Modulino Movement (LSM6DSOX over Qwiic) 50 times a second, looks for
-// the free-fall-then-impact pattern of a fall, and hands everything to the Linux
-// side over the Bridge. `python/main.py` serves those samples to the dashboard
-// over WebSocket; the data contract lives in src/hardware/protocol.ts.
+// Reads an MPU6050 (accelerometer + gyroscope over I2C) 50 times a second, looks
+// for the free-fall-then-impact pattern of a fall, and hands everything to the
+// Linux side over the Bridge. `python/main.py` serves those samples to the
+// dashboard over WebSocket; the data contract lives in src/hardware/protocol.ts
+// and hardware/steady_unoq/README.md.
 //
 // Controls on the wearable:
 //   * one press of the button      → "I'm OK", acknowledged on the dashboard
@@ -14,23 +15,23 @@
 // rather than on key-up: a single press cannot be reported until the code knows
 // two more are not coming.
 //
-// Qwiic on the UNO Q is the secondary I2C bus, so the Modulino library uses
-// Wire1. If nothing is found there we retry on the A4/A5 header pins (Wire).
+// Wiring: MPU6050 SDA→A4, SCL→A5, VCC→3V3, GND→GND (address 0x68 with AD0 low,
+// 0x69 with AD0 high — both are tried). The button sits between D2 and GND.
 //
-// The NFC reader (PN532, I2C) is optional: install the Adafruit PN532 library
-// from App Lab's library manager and it is picked up automatically. It must sit
-// on the Wire bus (A4/A5), not the Qwiic chain, because the Modulino owns Wire1.
-// Without the library the sketch still builds and NFC is simply off.
+// The NFC reader (PN532, I2C, 0x24) is still optional and not fitted yet: install
+// the Adafruit PN532 library in App Lab and it is picked up automatically. With
+// no reader the sketch still builds and taps arrive as dummy data from the
+// relay (`dummy_nfc_every_s` in python/main.py) or from the simulator, so the
+// responder flow can be exercised without the hardware.
 //
 // This replaces hardware/steady_wearable (Nano 33 BLE): the UNO Q has no BLE
-// radio visible to the sketch, and no onboard IMU, hence the Qwiic sensor.
+// radio visible to the sketch, and no onboard IMU.
 
 #include "Arduino_RouterBridge.h"
-#include <Arduino_Modulino.h>
+#include <Wire.h>
 
 #if __has_include(<Adafruit_PN532.h>)
 #include <Adafruit_PN532.h>
-#include <Wire.h>
 #define STEADY_NFC_READY 1
 #else
 #define STEADY_NFC_READY 0
@@ -39,11 +40,24 @@
 // ---- identity -------------------------------------------------------------
 // Give every device its own ID before flashing; the dashboard pairs on it.
 static const char* DEVICE_ID = "ST-UNOQ1";
-static const char* FIRMWARE = "1.1.0";
+static const char* FIRMWARE = "1.2.0";
 
 // ---- sampling -------------------------------------------------------------
 static constexpr uint32_t SAMPLE_HZ = 50;
 static constexpr uint32_t SAMPLE_MS = 1000 / SAMPLE_HZ;
+
+// ---- MPU6050 (I2C) --------------------------------------------------------
+// Registers are only the ones this sketch touches.
+static constexpr uint8_t IMU_REG_CONFIG = 0x1A;
+static constexpr uint8_t IMU_REG_SMPLRT_DIV = 0x19;
+static constexpr uint8_t IMU_REG_GYRO_CONFIG = 0x1B;
+static constexpr uint8_t IMU_REG_ACCEL_CONFIG = 0x1C;
+static constexpr uint8_t IMU_REG_ACCEL_XOUT_H = 0x3B;
+static constexpr uint8_t IMU_REG_PWR_MGMT_1 = 0x6B;
+static constexpr uint8_t IMU_REG_WHO_AM_I = 0x75;
+static constexpr uint8_t IMU_ADDRESSES[] = {0x68, 0x69};
+static constexpr float ACCEL_LSB_PER_G = 16384.0f;   // ±2 g
+static constexpr float GYRO_LSB_PER_DPS = 65.5f;     // ±500 °/s
 
 // ---- fall detection (untuned: test with real drops before relying on it) ---
 // A fall starts with the body becoming weightless, then a hard landing.
@@ -75,9 +89,8 @@ static constexpr uint8_t TAP_BLINKS = 2;
 static constexpr uint8_t SURVEY_BLINKS = 4;
 static constexpr uint32_t BLINK_MS = 120;
 
-ModulinoMovement movement;
-
 bool imuPresent = false;
+uint8_t imuAddress = IMU_ADDRESSES[0];
 uint32_t nextImuRetry = 0;
 
 uint32_t lastSampleMs = 0;
@@ -111,7 +124,7 @@ uint32_t lastTagMs = 0;
 
 // ---- Bridge functions the Linux side can call -----------------------------
 
-/** "<deviceId>;<firmware>", e.g. "ST-UNOQ1;1.1.0" */
+/** "<deviceId>;<firmware>", e.g. "ST-UNOQ1;1.2.0" */
 String steadyInfo() {
   return String(DEVICE_ID) + ";" + FIRMWARE;
 }
@@ -123,24 +136,83 @@ bool steadyIdentify() {
   return true;
 }
 
+// ---- MPU6050 helpers ------------------------------------------------------
+
+bool imuWrite(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(imuAddress);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool imuRead(uint8_t reg, uint8_t* buf, uint8_t len) {
+  Wire.beginTransmission(imuAddress);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(imuAddress, len) != len) return false;
+  for (uint8_t i = 0; i < len; i++) {
+    if (Wire.available() == 0) return false;
+    buf[i] = (uint8_t)Wire.read();
+  }
+  return true;
+}
+
+int16_t be16(const uint8_t* p) {
+  return (int16_t)(((uint16_t)p[0] << 8) | p[1]);
+}
+
+bool startImu() {
+  Wire.begin();
+  Wire.setClock(400000);
+
+  for (uint8_t i = 0; i < sizeof(IMU_ADDRESSES); i++) {
+    imuAddress = IMU_ADDRESSES[i];
+
+    uint8_t who = 0;
+    if (!imuRead(IMU_REG_WHO_AM_I, &who, 1)) continue;
+    // 0x98 and 0x72 are clones that behave like an MPU6050 for these registers
+    if (who != 0x68 && who != 0x98 && who != 0x72) continue;
+
+    // Reset, then wake on the X-gyro PLL
+    if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x80)) continue;
+    delay(100);
+    if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x01)) continue;
+
+    imuWrite(IMU_REG_SMPLRT_DIV, 19);   // 1 kHz base rate / 20 = 50 Hz
+    imuWrite(IMU_REG_CONFIG, 0x03);     // DLPF, ~44 Hz accelerometer bandwidth
+    imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // ±500 °/s
+    imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // ±2 g
+
+    Monitor.print("[steady] MPU6050 online at 0x");
+    Monitor.print(imuAddress, HEX);
+    Monitor.print(", WHO_AM_I 0x");
+    Monitor.println(who, HEX);
+    return true;
+  }
+
+  Monitor.println("[steady] no MPU6050 on A4/A5 (0x68 or 0x69), retrying");
+  return false;
+}
+
+bool readImu(float& ax, float& ay, float& az, float& gx, float& gy, float& gz) {
+  uint8_t buf[14];
+  if (!imuRead(IMU_REG_ACCEL_XOUT_H, buf, sizeof(buf))) return false;
+
+  ax = be16(&buf[0]) / ACCEL_LSB_PER_G;
+  ay = be16(&buf[2]) / ACCEL_LSB_PER_G;
+  az = be16(&buf[4]) / ACCEL_LSB_PER_G;
+  // buf[6..7] is die temperature; not needed for fall detection
+  gx = be16(&buf[8]) / GYRO_LSB_PER_DPS;
+  gy = be16(&buf[10]) / GYRO_LSB_PER_DPS;
+  gz = be16(&buf[12]) / GYRO_LSB_PER_DPS;
+  return true;
+}
+
 // ---- helpers --------------------------------------------------------------
 
 void blink(uint8_t times) {
   blinksLeft = times * 2;
   lastBlinkMs = millis();
-}
-
-void startImu() {
-  Modulino.begin();  // Wire1 = Qwiic connector on the UNO Q
-  imuPresent = movement.begin();
-
-  if (!imuPresent) {
-    Modulino.begin(Wire);  // fall back to SDA/SCL on the UNO headers
-    imuPresent = movement.begin();
-  }
-
-  Monitor.println(imuPresent ? "[steady] Modulino Movement online"
-                             : "[steady] no Modulino Movement found, retrying");
 }
 
 void startNfc() {
@@ -157,7 +229,7 @@ void startNfc() {
   Monitor.print("[steady] PN532 ready, firmware 0x");
   Monitor.println(version, HEX);
 #else
-  Monitor.println("[steady] NFC off: install the Adafruit PN532 library to enable taps");
+  Monitor.println("[steady] NFC off: no reader fitted; taps can come from the relay's dummy mode");
 #endif
 }
 
@@ -302,7 +374,7 @@ void setup() {
   Bridge.provide_safe("steady_info", steadyInfo);
   Bridge.provide_safe("steady_identify", steadyIdentify);
 
-  startImu();
+  imuPresent = startImu();
   startNfc();
 
   Monitor.print("[steady] ");
@@ -319,7 +391,7 @@ void loop() {
 
   if (!imuPresent && now >= nextImuRetry) {
     nextImuRetry = now + 2000;
-    startImu();
+    imuPresent = startImu();
   }
 
 #if STEADY_NFC_READY
@@ -331,15 +403,8 @@ void loop() {
 
   if (imuPresent && now - lastSampleMs >= SAMPLE_MS) {
     lastSampleMs = now;
-    if (movement.update()) {
-      const float ax = movement.getX();
-      const float ay = movement.getY();
-      const float az = movement.getZ();
-      // The Modulino library exposes angular rate as roll/pitch/yaw
-      const float gx = movement.getRoll();
-      const float gy = movement.getPitch();
-      const float gz = movement.getYaw();
-
+    float ax, ay, az, gx, gy, gz;
+    if (readImu(ax, ay, az, gx, gy, gz)) {
       detectFall(now, ax, ay, az);
       publishSample(now, ax, ay, az, gx, gy, gz);
     }

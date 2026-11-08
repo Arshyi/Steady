@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Steady fall-detection ingest API and caregiver dashboard (Cloudflare Workers + D1)",
   "scripts": {
-    "dev": "wrangler dev --port 8787 --local",
+    "dev": "wrangler dev --port 8788 --local",
     "test": "node --test",
     "simulate": "node tools/simulate-device.js",
     "deploy": "wrangler deploy",

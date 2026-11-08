@@ -8,9 +8,8 @@ profiles:
     platforms:
       - platform: arduino:zephyr
     libraries:
-      - Arduino_Modulino
       - Arduino_RouterBridge
-      # Reply to an alert by tapping an NFC tag on the wearable. Without this
-      # library the sketch still builds: the NFC block is compiled out and the
-      # Monitor says so at boot.
+      # Optional: reply to an alert by tapping an NFC tag on the wearable. No
+      # reader is fitted yet, so the sketch builds without it - the NFC block is
+      # compiled out and taps come from the relay's dummy mode or the simulator.
       - Adafruit PN532

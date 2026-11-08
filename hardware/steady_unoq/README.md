@@ -1,13 +1,13 @@
 # Steady on the Arduino UNO Q
 
-An Arduino App Lab app: the STM32 sketch reads the accelerometer and gyroscope
-and detects falls, and the Debian side serves the readings to the dashboard over
-the local network.
+An Arduino App Lab app: the STM32 sketch reads an MPU6050, detects falls, and the
+Debian side relays the readings to the dashboard and to the two backends.
 
 ```
-Modulino Movement ──Qwiic (Wire1)──► STM32 sketch ──Bridge──► python/main.py ──WebSocket──► Settings page
-        LSM6DSOX                    50 Hz + fall test          8765                       src/hardware/connection.ts
-Button (D2→GND) + PN532 (I2C) ─────► presses, NFC taps ───────► survey scans ──HTTP──► Worker (web/)
+MPU6050 ──I2C (A4/A5)──► STM32 sketch ──Bridge──► python/main.py ──WebSocket──► Settings page
+                          50 Hz + fall test         8765                        src/hardware/connection.ts
+Button (D2→GND) ─────────► presses ─────────────────┬──HTTP──► server/ (Databricks): readings, falls, acks
+Optional PN532 (I2C) ────► NFC taps (dummy for now) └──HTTP──► web/ (survey store): surveys, location, ack log
 ```
 
 ## Why this exists next to `../steady_wearable`
@@ -16,11 +16,10 @@ Button (D2→GND) + PN532 (I2C) ─────► presses, NFC taps ───�
 `ArduinoBLE` and the board's built-in IMU. The UNO Q is a different machine.
 
 - Its sketch runs on an **STM32U585 under Zephyr**, and it has **no onboard IMU**,
-  so acceleration and rotation come from an external sensor — here the Modulino
-  Movement (LSM6DSOX) on the Qwiic connector, which is `Wire1` (I2C4).
+  so acceleration and rotation come from an **MPU6050** on the I2C header pins.
 - The sketch cannot open a Bluetooth radio, so readings leave through the
   **Bridge** to the Linux side, which owns Wi-Fi and the network stack.
-- The Qwiic connector is **3.3 V only**, and `LED_BUILTIN` (LED3, red) is
+- Give the MPU6050 **3.3 V only**, and note that `LED_BUILTIN` (LED3, red) is
   **active LOW** — both differ from a classic UNO.
 
 ## Run it
@@ -28,27 +27,30 @@ Button (D2→GND) + PN532 (I2C) ─────► presses, NFC taps ───�
 1. Arduino App Lab → **Create new app**, name it `steady_unoq`.
 2. Copy this folder's `python/`, `sketch/` and `app.yaml` into the app
    (App Lab manages `sketch/sketch.yaml`; if its FQBN differs, let App Lab
-   regenerate it and keep the `Arduino_Modulino` library).
-3. Plug the Modulino Movement into the Qwiic connector with a Qwiic cable.
+   regenerate it and keep the `Arduino_RouterBridge` library).
+3. Wire the sensor: MPU6050 SDA→A4, SCL→A5, VCC→3V3, GND→GND. The address is
+   0x68 with AD0 low, 0x69 with it high; both are tried.
 4. Set `DEVICE_ID` in `sketch/sketch.ino` (e.g. `ST-0420`) — the dashboard pairs
-   on this id.
+   on this id — and point `CONFIG` in `python/main.py` at your server.
 5. Run the app. The sketch console should show:
 
 ```
-[steady] Modulino Movement online
-[steady] ST-UNOQ1 firmware 1.0.0
+[steady] MPU6050 online at 0x68, WHO_AM_I 0x68
+[steady] ST-UNOQ1 firmware 1.2.0
 ```
 
 and the Python console:
 
 ```
 [steady] ST-UNOQ1 serving ws://0.0.0.0:8765
-[steady] sketch reports ST-UNOQ1;1.0.0
+[steady] readings and falls to http://127.0.0.1:8787
+[steady] surveys, location and acks to http://127.0.0.1:8788
+[steady] sketch reports ST-UNOQ1;1.2.0
 ```
 
-6. In the dashboard, open **Settings**, enter `ws://<board-ip>:8765`, and press
-   **Connect over network**. Live readings, the self-test and pairing work the
-   same as over Bluetooth or USB.
+6. In the dashboard, open **Settings**, enter the board's address (`unoq.local` or
+   its IP), and press **Connect over Wi-Fi**. Live readings, the self-test and
+   pairing work the same as over Bluetooth or USB.
 
 Find the board's address with `nmcli device show wlan0 | grep IP4.ADDRESS`, or
 from the network panel in App Lab.
@@ -58,22 +60,25 @@ from the network panel in App Lab.
 | Part | Connect to | Notes |
 | --- | --- | --- |
 | Momentary button | D2 and GND | `INPUT_PULLUP`, so no resistor; a press reads LOW |
-| PN532 (I2C) | A4 (SDA), A5 (SCL), 3V3, GND | **not** the Qwiic chain — the Modulino owns `Wire1` |
+| PN532 (I2C, 0x24) | A4 (SDA), A5 (SCL), 3V3, GND | shares the bus with the MPU6050 |
 
 One press means "I'm OK". Three presses within 2.5 s start a survey, and the
 gesture is decided 650 ms after the last press, so a single press reports after
 about two thirds of a second. Two presses are ignored as a fumble. The LED
 answers each gesture: one blink for OK, two for a tag, four for a survey.
 
-NFC is compiled in only when App Lab has the **Adafruit PN532** library
-installed (`__has_include`). Without it the Monitor prints
-`[steady] NFC off: install the Adafruit PN532 library to enable taps` and every
-other feature keeps working. The reader is on `Wire` (A4/A5) because
-`Modulino.begin()` takes `Wire1`.
+**No NFC reader is fitted yet**, so tag taps are dummy data for now. Set
+`dummy_nfc_every_s` in `python/main.py` to have the relay emit a fake tag every
+few seconds, or let `tools/simulator.py` emit them. The rest of the responder
+flow — the `T` line to the dashboard, `POST /api/acks` to the server, the
+"via NFC tag …" note on the cleared alert — runs unchanged once a reader is
+wired in. NFC is compiled in only when App Lab has the **Adafruit PN532**
+library installed (`__has_include`); without it the Monitor prints
+`[steady] NFC off: no reader fitted…` and every other feature keeps working.
 
 ## What the sketch sends
 
-Fifty samples a second, one Bridge call each, plus one call per fall:
+Fifty samples a second, one Bridge call each, plus one call per event:
 
 | Sketch → Python | Payload |
 | --- | --- |
@@ -90,58 +95,70 @@ Fifty samples a second, one Bridge call each, plus one call per fall:
 
 ## What the Linux side serves
 
-`ws://0.0.0.0:8765`, JSON text frames (contract in `src/hardware/protocol.ts`):
+`ws://0.0.0.0:8765`, text lines — the same ones USB serial uses, so one parser
+covers both (contract in `src/hardware/protocol.ts`):
 
 | Server → app | Meaning |
 | --- | --- |
-| `{"type":"hello","device":"ST-UNOQ1","firmware":"1.0.0","rate":50}` | sent once on connect |
-| `{"type":"motion","t":12345,"ax":0.02,"ay":-0.01,"az":1.0,"gx":12.4,"gy":-3.1,"gz":0.8}` | one sample |
-| `{"type":"fall","t":12980,"peak":3.42}` | fall confirmed by the MCU |
-| `{"type":"ok","t":13110}` | the wearer pressed the button once |
-| `{"type":"tap","t":14400,"tag":"04A2339C1B80"}` | a staff NFC tag was tapped |
-| `{"type":"survey","scans":5,"accessPoints":9,"id":12}` | a capture finished, and its backend id if it was stored |
-| `{"type":"location","room":"103","floor":"1","confidence":82}` | the backend matched the latest scan |
+| `I,ST-UNOQ1,1.2.0` | device info, sent on connect and in answer to `I?` |
+| `M,0.02,-0.01,1.00,12.4,-3.1,0.8` | one sample (accel g, gyro °/s) |
+| `F` | fall confirmed by the MCU |
+| `O` | the wearer pressed the button once: "I'm OK" |
+| `T,04A2339C1B80` | a responder tapped an NFC tag |
+| `S,5,9` | a survey capture was stored (scans, access points) |
+| `L,103,1,82` | the survey store matched the newest scan to a room |
 
 | App → server | Meaning |
 | --- | --- |
-| `{"type":"identify"}` | blink the LED |
-| `{"type":"survey"}` | capture the current room now (same as three presses) |
+| `I?` | report the info line |
+| `I` | blink the LED |
+| `S` | capture the current room now (same as three presses) |
 
-The server is `python/steady_net.py`, a WebSocket implementation on the standard
-library alone — the board has no guaranteed pip packages, and the app should not
-depend on an install step.
+There is no `B` (battery) line: the UNO Q cannot measure it, so the dashboard
+shows "–". The server is `python/steady_net.py`, a WebSocket implementation on the
+standard library alone — the board has no guaranteed pip packages, and the app
+should not depend on an install step.
 
-## Survey mode and acknowledgements (optional)
+## What the relay posts
 
-Set the backend under `CONFIG` in `python/main.py` and the board starts posting
-what the dashboard needs:
+`CONFIG` at the top of `python/main.py`:
 
 ```python
-"backend_url": "http://192.168.1.20:8787",
-"backend_token": "dev-token",      # DEVICE_TOKEN from web/.dev.vars
+"server_url": "http://192.168.1.20:8787",   # server/ — Databricks
+"survey_url": "http://127.0.0.1:8788",      # web/ — survey store
+"survey_key": "dev-view-key",               # VIEW_KEY from web/.dev.vars
 "survey_scans": 5,
 "survey_interval_s": 1.5,
-"locate_every_s": 300,             # scan and match every 5 min (0 = only on demand)
+"locate_every_s": 300,                      # scan and match every 5 min (0 = on demand)
+"dummy_nfc_every_s": 0,                     # >0 fakes an NFC tap this often
 ```
 
-With a backend URL set:
+Every second it averages the last second of samples and posts them exactly like
+`server/mock-relay.ts` does:
+
+```json
+POST /api/readings {"deviceId":"ST-UNOQ1","movement":42.1,"gyroDps":84.2,"accelG":1.01}
+POST /api/falls    {"deviceId":"ST-UNOQ1"}
+POST /api/acks     {"deviceId":"ST-UNOQ1","kind":"ok"}            // or kind:"nfc", tag:"…"
+```
+
+`/api/acks` clears that resident's newest open alert and records who did it, so
+the dashboard reads "handled at 16:48 · via I'm OK button".
+
+The survey store is separate because fingerprints are not readings:
 
 * Three presses run 5 Wi-Fi scans and `POST /api/v1/surveys`. Nothing is stored
   until someone names the room in the dashboard's Settings page, so a capture
   taken in the wrong place costs one row, not a wrong fingerprint.
 * Every `locate_every_s` the board scans once and posts `/api/v1/locate`; the
   Worker matches it against the labelled fingerprints and stores where it thinks
-  the device is. `GET /api/v1/location?device=…` returns that, and a fall alert
-  on the dashboard can read the same room and floor.
-* An OK press posts `/api/v1/acks` with `kind: "ok"`, a tag tap with
-  `kind: "nfc"` and the tag's UID.
-* Falls still go to `/api/v1/ingest`.
+  the device is.
+* OK presses and tag taps are also logged to `/api/v1/acks`, which is what the
+  Settings page's responder list reads.
 
 The scans themselves use `nmcli`, `iw` or `iwlist`, whichever the board has;
 `python/wifi_scan.py` holds the parsers and prefers real dBm from `iw`. Leave
-`backend_url` empty to run the board standalone — everything except surveys,
-location and acks keeps working, and the dashboard's Settings page still shows
-live readings.
+either URL empty to run without that backend.
 
 ## Testing without the board
 
@@ -149,9 +166,9 @@ live readings.
 python hardware/steady_unoq/tools/simulator.py --port 8765
 ```
 
-It speaks the same protocol (hello, 50 Hz motion, a fall every 12 s) and also
-emits `ok`, `tap`, `survey` and `location` frames, so the whole Settings page —
-including the location panel — can be exercised on a laptop. It needs no
+It speaks the same protocol (`I` info, 50 Hz `M`, `F` every 12 s) and also emits
+`O`, `T`, `S` and `L` lines, so the whole Settings page — including the location
+panel — can be exercised on a laptop with dummy responder taps. It needs no
 third-party packages.
 
 ## Tuning the fall test

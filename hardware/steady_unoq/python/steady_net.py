@@ -131,12 +131,15 @@ class WebSocketServer:
         on_message=None,
         on_connect=None,
         on_disconnect=None,
+        on_command=None,
     ):
         self.host = host
         self.port = port
         self.on_message = on_message
         self.on_connect = on_connect
         self.on_disconnect = on_disconnect
+        # on_command(send, text) answers one client directly ("I?")
+        self.on_command = on_command
 
         self._clients: dict[int, socket.socket] = {}
         self._lock = threading.Lock()
@@ -242,11 +245,22 @@ class WebSocketServer:
                     except OSError:
                         break
                     continue
-                if opcode == _OP_TEXT and self.on_message is not None:
-                    try:
-                        self.on_message(payload.decode("utf-8"))
-                    except Exception:  # a bad frame must not kill the connection
-                        pass
+                if opcode == _OP_TEXT:
+                    text = payload.decode("utf-8")
+                    if self.on_command is not None:
+                        try:
+                            self.on_command(
+                                lambda frame: conn.sendall(_frame(frame.encode("utf-8"))), text
+                            )
+                        except OSError:
+                            break
+                        except Exception:  # a bad command must not kill the connection
+                            pass
+                    if self.on_message is not None:
+                        try:
+                            self.on_message(text)
+                        except Exception:  # a bad frame must not kill the connection
+                            pass
         except (OSError, ValueError):
             pass
         finally:

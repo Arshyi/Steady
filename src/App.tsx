@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router'
-import { AlertsProvider } from './alerts'
+import { LiveProvider } from './live'
 import { AppShell } from './components/AppShell'
 import { Home } from './pages/Home'
 import { Overview } from './pages/Overview'
@@ -9,7 +9,7 @@ import { Settings } from './pages/Settings'
 
 export default function App() {
   return (
-    <AlertsProvider>
+    <LiveProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Home />} />
@@ -24,6 +24,6 @@ export default function App() {
           <Route path="/dashboard" element={<Navigate to="/overview" replace />} />
         </Routes>
       </BrowserRouter>
-    </AlertsProvider>
+    </LiveProvider>
   )
 }

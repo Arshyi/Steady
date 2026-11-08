@@ -1,13 +1,15 @@
 # Steady website — Cloudflare Worker + D1
 
-Ingest API, server-side fall analysis and the caregiver dashboard.
+Ingest API, server-side fall analysis, and the survey store the wearable posts
+Wi-Fi fingerprints to. The Databricks backend the dashboard reads is in `server/`;
+this Worker listens on 8788 so the two can run side by side.
 
 ## Local development
 
 ```bash
 npm install
-npm run dev                  # http://127.0.0.1:8787
-npm run simulate -- --url http://127.0.0.1:8787 --token dev-token \
+npm run dev                  # http://127.0.0.1:8788
+npm run simulate -- --url http://127.0.0.1:8788 --token dev-token \
   --device steady-001 --minutes 30 --fall
 ```
 

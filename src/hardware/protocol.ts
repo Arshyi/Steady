@@ -49,108 +49,27 @@ export function parseMotion(view: DataView): Omit<MotionSample, 't'> {
   }
 }
 
-// ---------- Network transport (Arduino UNO Q) ----------
+// ---------- Wi-Fi relay (Arduino UNO Q) ----------
+
+/** Port the relay on the board's Linux side listens on for the dashboard */
+export const WIFI_PORT = 8765
 
 /**
- * `hardware/steady_unoq` serves the same six channels over a WebSocket instead
- * of Bluetooth: the sketch reads the Modulino Movement, the button and the NFC
- * reader, and hands each event to Python over the Bridge, which broadcasts JSON
- * text frames.
+ * The relay in `hardware/steady_unoq/python/main.py` serves the same text lines
+ * as USB serial, so one parser covers both:
  *
- *   server → app   {"type":"hello","device":"ST-UNOQ1","firmware":"1.1.0","rate":50}
- *                  {"type":"motion","t":12345,"ax":0.02,"ay":-0.01,"az":1,"gx":12.4,"gy":-3.1,"gz":0.8}
- *                  {"type":"fall","t":12980,"peak":3.42}
- *                  {"type":"ok","t":13110}
- *                  {"type":"tap","t":14400,"tag":"04A2339C1B80"}
- *                  {"type":"survey","id":12,"scans":5,"accessPoints":9,"takenAt":1690000000000}
- *                  {"type":"location","room":"103","floor":"1","confidence":82}
- *   app → server   {"type":"identify"}
- *                  {"type":"survey"}      ask the board to capture a room now
+ *   I,ST-UNOQ1,1.1.0         device info, in reply to "I?"
+ *   M,ax,ay,az,gx,gy,gz      motion sample (accel in g, gyro in °/s)
+ *   F                        fall detected
+ *   O                        the wearer pressed the button once: "I'm OK"
+ *   T,04A2339C1B80           a staff member tapped an NFC tag
+ *   S,5,9                    a survey capture was stored (scans, access points)
+ *   L,103,1,82               the backend placed the board in room 103, floor 1, 82% sure
  *
- * g and °/s again; `t` is the device's uptime in ms and is optional because the
- * app times samples with performance.now() like the other transports do. The
- * survey and location frames come from the backend round-trip, so they only
- * appear when the board is configured with a backend URL.
+ * The web app sends "I?\n" to ask for the info line and "I\n" to blink the LED.
+ * There is no B (battery) line: the UNO Q cannot measure it, so the app shows "–".
+ *
+ * The board also posts to the server in `server/` on its own — a one-second
+ * summary to /api/readings, and /api/falls the moment a fall fires — so the
+ * Settings page only shows what the board is doing.
  */
-export const NETWORK_DEFAULT_URL = 'ws://127.0.0.1:8765'
-
-/** Local storage key for the last address that worked */
-export const NETWORK_URL_KEY = 'steady.networkUrl'
-
-export type NetworkMessage =
-  | { type: 'hello'; device?: string; firmware?: string; rate?: number }
-  | { type: 'motion'; t?: number; ax: number; ay: number; az: number; gx: number; gy: number; gz: number }
-  | { type: 'fall'; t?: number; peak?: number }
-  | { type: 'ok'; t?: number }
-  | { type: 'tap'; t?: number; tag?: string }
-  | { type: 'survey'; id?: number; scans?: number; accessPoints?: number; takenAt?: number }
-  | { type: 'location'; room?: string; floor?: string; confidence?: number }
-  | { type: 'error'; message?: string }
-
-function number(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined
-}
-
-/** Reads one frame from the UNO Q. Malformed or unknown frames return undefined. */
-export function parseNetworkMessage(raw: string): NetworkMessage | undefined {
-  let data: unknown
-  try {
-    data = JSON.parse(raw)
-  } catch {
-    return undefined
-  }
-  if (!data || typeof data !== 'object') return undefined
-
-  const frame = data as Record<string, unknown>
-  const t = number(frame.t)
-
-  switch (frame.type) {
-    case 'hello':
-      return {
-        type: 'hello',
-        device: text(frame.device),
-        firmware: text(frame.firmware),
-        rate: number(frame.rate),
-      }
-    case 'motion': {
-      const ax = number(frame.ax)
-      const ay = number(frame.ay)
-      const az = number(frame.az)
-      const gx = number(frame.gx)
-      const gy = number(frame.gy)
-      const gz = number(frame.gz)
-      if (ax === undefined || ay === undefined || az === undefined) return undefined
-      if (gx === undefined || gy === undefined || gz === undefined) return undefined
-      return { type: 'motion', t, ax, ay, az, gx, gy, gz }
-    }
-    case 'fall':
-      return { type: 'fall', t, peak: number(frame.peak) }
-    case 'ok':
-      return { type: 'ok', t }
-    case 'tap':
-      return { type: 'tap', t, tag: text(frame.tag) }
-    case 'survey':
-      return {
-        type: 'survey',
-        id: number(frame.id),
-        scans: number(frame.scans),
-        accessPoints: number(frame.accessPoints),
-        takenAt: number(frame.takenAt),
-      }
-    case 'location':
-      return {
-        type: 'location',
-        room: text(frame.room),
-        floor: text(frame.floor),
-        confidence: number(frame.confidence),
-      }
-    case 'error':
-      return { type: 'error', message: text(frame.message) }
-    default:
-      return undefined
-  }
-}

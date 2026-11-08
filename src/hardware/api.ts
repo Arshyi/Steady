@@ -1,4 +1,8 @@
-// The dashboard's side of the Steady backend (web/).
+// The dashboard's side of the survey store (web/).
+//
+// This is separate from the Databricks backend in server/ (port 8787): server/
+// owns residents, readings and alerts, while the Worker in web/ keeps the Wi-Fi
+// fingerprints, location matches and acknowledgement log that survey mode needs.
 //
 // The board posts surveys, location matches and acknowledgements to the Worker
 // even when no browser is open; this reads them back and labels surveys. Both
@@ -33,7 +37,7 @@ function stored(key: string): string | undefined {
 export const API_BASE = (
   stored('steady.apiUrl') ??
   envValue('VITE_STEADY_API') ??
-  'http://127.0.0.1:8787'
+  'http://127.0.0.1:8788'
 ).replace(/\/+$/, '')
 
 const VIEW_KEY = stored('steady.viewKey') ?? envValue('VITE_STEADY_KEY') ?? 'dev-view-key'

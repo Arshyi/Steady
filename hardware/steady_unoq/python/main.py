@@ -1,7 +1,7 @@
 """Steady — Arduino UNO Q app, Linux side.
 
-The sketch on the STM32 (`sketch/sketch.ino`) reads the Modulino Movement over
-Qwiic 50 times a second and hands events to this script over the Bridge:
+The sketch on the STM32 (`sketch/sketch.ino`) reads the MPU6050 over I2C 50 times
+a second and hands events to this script over the Bridge:
 
     "12345,0.02,-0.01,1.00,12.4,-3.1,0.8"    motion:  ms, ax, ay, az, gx, gy, gz
     "12980,3.42,180"                         fall:    ms, peak_g, free_fall_ms
@@ -9,9 +9,23 @@ Qwiic 50 times a second and hands events to this script over the Bridge:
     "14002,3"                                survey:  ms, presses (three taps)
     "14400,04:A2:33:9C:1B:80"                NFC tap: ms, tag uid
 
-This script serves those to the dashboard over a WebSocket, and (when
-`backend_url` is set) posts surveys, location matches, acknowledgements and falls
-to the Steady backend.
+This script is the board's relay. It serves the dashboard over a WebSocket using
+the same text lines as USB serial (see `src/hardware/protocol.ts`):
+
+    I,<deviceId>,<firmware>       answer to "I?"
+    M,ax,ay,az,gx,gy,gz           every sample
+    F                             a fall
+    O                             "I'm OK" pressed
+    T,<tag>                       a responder tapped an NFC tag
+    S,<scans>,<accessPoints>      a survey capture was stored
+    L,<room>,<floor>,<confidence> the survey store matched a room
+
+and it posts to two places:
+
+  * the Databricks backend in `server/` — a one-second summary to /api/readings
+    and /api/falls the moment a fall fires, exactly like `server/mock-relay.ts`
+  * the survey store in `web/` — Wi-Fi fingerprints, location matches and the
+    acknowledgement log that survey mode needs
 
 The Bridge handlers below only append to a deque: a Python function provided
 with `Bridge.provide` runs on a dedicated thread and must not call back into the
@@ -21,6 +35,7 @@ Bridge, and anything slow there stalls the MCU's link.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import threading
@@ -46,15 +61,21 @@ CONFIG = {
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,
-    # Steady backend (the Worker in web/). Leave empty to run without one.
-    #   "backend_url": "http://192.168.1.20:8787"
-    "backend_url": "",
-    "backend_token": "",
+    # The Databricks backend (server/). Leave empty to send readings nowhere.
+    #   "server_url": "http://192.168.1.20:8787"
+    "server_url": "http://127.0.0.1:8787",
+    # The survey store (web/). Needs the view key from web/.dev.vars.
+    "survey_url": "http://127.0.0.1:8788",
+    "survey_key": "dev-view-key",
     # Survey mode: how many scans make up one room fingerprint
     "survey_scans": 5,
     "survey_interval_s": 1.5,
     # Scan and match every N seconds (0 = only when a survey is taken)
     "locate_every_s": 0,
+    # NFC is not fitted yet: >0 makes the relay emit a dummy responder tap this
+    # often, so the dashboard and backend can be exercised with fake tag data.
+    "dummy_nfc_every_s": 0,
+    "dummy_nfc_tag": "04A2339C1B80",
 }
 
 # ---------------------------------------------------------------------------
@@ -110,14 +131,13 @@ def _parse_motion(line: str) -> dict | None:
     if not values:
         return None
     return {
-        "type": "motion",
         "t": int(values[0]),
-        "ax": round(values[1], 3),
-        "ay": round(values[2], 3),
-        "az": round(values[3], 3),
-        "gx": round(values[4], 1),
-        "gy": round(values[5], 1),
-        "gz": round(values[6], 1),
+        "ax": values[1],
+        "ay": values[2],
+        "az": values[3],
+        "gx": values[4],
+        "gy": values[5],
+        "gz": values[6],
     }
 
 
@@ -125,14 +145,14 @@ def _parse_fall(line: str) -> dict | None:
     values = _numbers(line, 3)
     if not values:
         return None
-    return {"type": "fall", "t": int(values[0]), "peak": round(values[1], 2), "freefall_ms": int(values[2])}
+    return {"t": int(values[0]), "peak": values[1], "freefall_ms": int(values[2])}
 
 
 def _parse_ok(line: str) -> dict | None:
     values = _numbers(line, 2)
     if not values:
         return None
-    return {"type": "ok", "t": int(values[0])}
+    return {"t": int(values[0])}
 
 
 def _parse_tap(line: str) -> dict | None:
@@ -144,41 +164,85 @@ def _parse_tap(line: str) -> dict | None:
     except ValueError:
         return None
     tag = parts[1].strip().replace(":", "").upper()[:32]
-    return {"type": "tap", "t": at, "tag": tag} if tag else None
+    return {"t": at, "tag": tag} if tag else None
 
 
 # ---------------------------------------------------------------------------
-# Backend
+# Posting
 # ---------------------------------------------------------------------------
 
-_backend_failed = False
+_failed: set[str] = set()
 
 
-def _post(path: str, payload: dict, timeout: float = 6.0) -> dict | None:
-    global _backend_failed
-    base = CONFIG.get("backend_url", "").strip().rstrip("/")
+def _post(base: str, path: str, payload: dict, key: str = "", timeout: float = 6.0) -> dict | None:
+    """POST JSON to one of the two backends. Logs one line per outage, not per call."""
+    base = (base or "").strip().rstrip("/")
     if not base:
         return None
 
+    headers = {"content-type": "application/json"}
+    if key:
+        headers["x-view-key"] = key
     request = urllib.request.Request(
-        f"{base}{path}",
-        data=json.dumps(payload).encode(),
-        method="POST",
-        headers={
-            "content-type": "application/json",
-            "authorization": f"Bearer {CONFIG.get('backend_token', '')}",
-        },
+        f"{base}{path}", data=json.dumps(payload).encode(), method="POST", headers=headers
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            _backend_failed = False
-            return json.loads(response.read() or b"{}")
+            _failed.discard(path)
+            body = response.read()
+            return json.loads(body or b"{}")
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        # One line per outage, not one per event
-        if not _backend_failed:
-            print(f"[steady] backend {path} failed: {exc}")
-            _backend_failed = True
+        if path not in _failed:
+            print(f"[steady] {base}{path} failed: {exc}")
+            _failed.add(path)
         return None
+
+
+def _to_server(path: str, payload: dict) -> dict | None:
+    return _post(CONFIG.get("server_url", ""), path, payload)
+
+
+def _to_survey_store(path: str, payload: dict) -> dict | None:
+    return _post(CONFIG.get("survey_url", ""), path, payload, key=CONFIG.get("survey_key", ""))
+
+
+# ---------------------------------------------------------------------------
+# Readings: one summary per second, like server/mock-relay.ts
+# ---------------------------------------------------------------------------
+
+_window: list[dict] = []
+_window_lock = threading.Lock()
+_last_summary = 0.0
+
+
+def _summarize(now: float) -> None:
+    global _last_summary
+    if now - _last_summary < 1.0:
+        return
+    _last_summary = now
+
+    with _window_lock:
+        batch = _window[:]
+        _window.clear()
+    if not batch:
+        return
+
+    gyro = [math.sqrt(s["gx"] ** 2 + s["gy"] ** 2 + s["gz"] ** 2) for s in batch]
+    accel = [math.sqrt(s["ax"] ** 2 + s["ay"] ** 2 + s["az"] ** 2) for s in batch]
+    gyro_dps = sum(gyro) / len(gyro)
+    accel_g = sum(accel) / len(accel)
+
+    stored = _to_server(
+        "/api/readings",
+        {
+            "deviceId": CONFIG["device_id"],
+            "movement": min(100.0, gyro_dps / 2),
+            "gyroDps": round(gyro_dps, 2),
+            "accelG": round(accel_g, 3),
+        },
+    )
+    if stored is not None and not stored.get("accepted"):
+        print(f"[steady] server ignored the reading: pair {CONFIG['device_id']} to a resident")
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +255,9 @@ _survey_lock = threading.Lock()
 _last_location: dict = {}
 
 
-def _broadcast(event: dict) -> None:
+def _broadcast(line: str) -> None:
     if _server is not None:
-        _server.broadcast(json.dumps(event, separators=(",", ":")))
+        _server.broadcast(line + "\n")
 
 
 def _start_survey() -> None:
@@ -211,16 +275,9 @@ def _start_survey() -> None:
             result = wifi_scan.run_survey(CONFIG["survey_scans"], CONFIG["survey_interval_s"])
             if not result["scan_count"]:
                 print("[steady] survey: no Wi-Fi scans came back (nmcli/iw/iwlist?)")
-                _broadcast({"type": "survey", "scans": 0, "accessPoints": 0, "error": "no-scans"})
                 return
 
-            summary = {
-                "type": "survey",
-                "scans": result["scan_count"],
-                "accessPoints": result["access_points"],
-                "takenAt": result["taken_at"],
-            }
-            stored = _post(
+            stored = _to_survey_store(
                 "/api/v1/surveys",
                 {
                     "device": CONFIG["device_id"],
@@ -228,10 +285,11 @@ def _start_survey() -> None:
                     "scans": result["scans"],
                 },
             )
-            if stored and stored.get("id"):
-                summary["id"] = stored["id"]
-            _broadcast(summary)
-            print(f"[steady] survey stored: {result['scan_count']} scans, {result['access_points']} APs")
+            _broadcast(f"S,{result['scan_count']},{result['access_points']}")
+            print(
+                f"[steady] survey stored: {result['scan_count']} scans, "
+                f"{result['access_points']} APs{' (not stored)' if stored is None else ''}"
+            )
         finally:
             _survey_running = False
 
@@ -242,18 +300,12 @@ def _locate_now() -> None:
     scan = wifi_scan.scan_access_points()
     if not scan:
         return
-    match = _post("/api/v1/locate", {"device": CONFIG["device_id"], "scan": scan})
+    match = _to_survey_store("/api/v1/locate", {"device": CONFIG["device_id"], "scan": scan})
     if not match or not match.get("room"):
         return
     _last_location.update(match)
-    _broadcast(
-        {
-            "type": "location",
-            "room": match["room"],
-            "floor": match.get("floor") or "",
-            "confidence": match.get("confidence"),
-        }
-    )
+    floor = match.get("floor") or ""
+    _broadcast(f"L,{match['room']},{floor},{match.get('confidence') or ''}")
 
 
 _locate_running = False
@@ -277,33 +329,40 @@ def _maybe_locate() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Acknowledgements ("I'm OK", NFC taps)
+# ---------------------------------------------------------------------------
+
+
+def _ack(kind: str, tag: str | None = None) -> None:
+    """Clear the resident's alert on the server and log the response for the dashboard."""
+    payload = {"deviceId": CONFIG["device_id"], "kind": kind}
+    if tag:
+        payload["tag"] = tag
+    cleared = _to_server("/api/acks", payload)
+    if cleared is None:
+        print("[steady] ack not delivered (is the server running and the device paired?)")
+
+    log = {"device": CONFIG["device_id"], "kind": kind, "ts": int(time.time() * 1000)}
+    if tag:
+        log["tag"] = tag
+    _to_survey_store("/api/v1/acks", log)
+
+
+# ---------------------------------------------------------------------------
 # WebSocket plumbing
 # ---------------------------------------------------------------------------
 
 
 def _hello(send) -> None:
-    send(
-        json.dumps(
-            {
-                "type": "hello",
-                "device": CONFIG["device_id"],
-                "firmware": CONFIG["firmware"],
-                "rate": 50,
-            }
-        )
-    )
+    # No B (battery) line: the UNO Q cannot measure it, so the app shows "–"
+    send(f"I,{CONFIG['device_id']},{CONFIG['firmware']}\n")
 
 
 def _client_message(text: str) -> None:
-    try:
-        message = json.loads(text)
-    except ValueError:
-        return
-    if not isinstance(message, dict):
-        return
-    if message.get("type") == "identify":
+    command = text.strip()
+    if command == "I":
         _identify.set()
-    elif message.get("type") == "survey":
+    elif command == "S":
         _surveys.append(f"{int(time.time() * 1000)},3")
 
 
@@ -313,10 +372,11 @@ def _client_message(text: str) -> None:
 
 _checked_sketch = False
 _next_locate = 0.0
+_next_dummy_tap = 0.0
 
 
 def loop() -> None:
-    global _checked_sketch, _next_locate
+    global _checked_sketch, _next_locate, _next_dummy_tap
 
     if not _checked_sketch:
         try:
@@ -329,63 +389,56 @@ def loop() -> None:
 
     while _samples:
         sample = _parse_motion(_samples.popleft())
-        if sample is not None:
-            _broadcast(sample)
+        if sample is None:
+            continue
+        _broadcast(
+            "M,{:.3f},{:.3f},{:.3f},{:.1f},{:.1f},{:.1f}".format(
+                sample["ax"], sample["ay"], sample["az"], sample["gx"], sample["gy"], sample["gz"]
+            )
+        )
+        with _window_lock:
+            _window.append(sample)
 
     while _falls:
         fall = _parse_fall(_falls.popleft())
-        if fall is not None:
-            _broadcast(fall)
-            _post(
-                "/api/v1/ingest",
-                {
-                    "device": CONFIG["device_id"],
-                    "firmware": CONFIG["firmware"],
-                    "events": [
-                        {
-                            "uid": f"{CONFIG['device_id']}-{fall['t']}",
-                            "ts": int(time.time() * 1000),
-                            "device_ts": fall["t"],
-                            "peak_g": fall["peak"],
-                            "confidence": 90,
-                        }
-                    ],
-                },
-            )
-            print(f"[steady] fall detected, peak {fall['peak']} g")
+        if fall is None:
+            continue
+        _broadcast("F")
+        # Fast path: straight to the server, like the mock relay
+        _to_server("/api/falls", {"deviceId": CONFIG["device_id"]})
+        print(f"[steady] fall detected, peak {fall['peak']:.2f} g")
 
     while _oks:
         ok = _parse_ok(_oks.popleft())
-        if ok is not None:
-            _broadcast(ok)
-            _post(
-                "/api/v1/acks",
-                {"device": CONFIG["device_id"], "kind": "ok", "ts": int(time.time() * 1000)},
-            )
+        if ok is None:
+            continue
+        _broadcast("O")
+        _ack("ok")
 
     while _taps:
         tap = _parse_tap(_taps.popleft())
-        if tap is not None:
-            _broadcast(tap)
-            _post(
-                "/api/v1/acks",
-                {
-                    "device": CONFIG["device_id"],
-                    "kind": "nfc",
-                    "tag": tap["tag"],
-                    "ts": int(time.time() * 1000),
-                },
-            )
-            print(f"[steady] responder tap {tap['tag']}")
+        if tap is None:
+            continue
+        _broadcast(f"T,{tap['tag']}")
+        _ack("nfc", tap["tag"])
+        print(f"[steady] responder tap {tap['tag']}")
 
     while _surveys:
         _surveys.popleft()
         _start_survey()
 
     now = time.time()
+    _summarize(now)
+
     if CONFIG.get("locate_every_s") and now >= _next_locate:
         _next_locate = now + float(CONFIG["locate_every_s"])
         _maybe_locate()
+
+    # Dummy NFC: no reader is fitted yet, so taps can be faked for demos
+    dummy_every = float(CONFIG.get("dummy_nfc_every_s") or 0)
+    if dummy_every > 0 and now >= _next_dummy_tap:
+        _next_dummy_tap = now + dummy_every
+        _taps.append(f"{int(now * 1000)},{CONFIG['dummy_nfc_tag']}")
 
     if _identify.is_set():
         _identify.clear()
@@ -412,12 +465,21 @@ def main() -> None:
         on_message=_client_message,
         on_connect=_hello,
         on_disconnect=None,
+        on_command=_command,
     ).start()
     print(f"[steady] {CONFIG['device_id']} serving ws://{CONFIG['ws_host']}:{CONFIG['ws_port']}")
-    if CONFIG.get("backend_url"):
-        print(f"[steady] posting surveys and acks to {CONFIG['backend_url']}")
+    if CONFIG.get("server_url"):
+        print(f"[steady] readings and falls to {CONFIG['server_url']}")
+    if CONFIG.get("survey_url"):
+        print(f"[steady] surveys, location and acks to {CONFIG['survey_url']}")
 
     App.run(user_loop=loop)
+
+
+def _command(send, text: str) -> None:
+    """Answers "I?" without going through loop(), so the app sees info at once."""
+    if text.strip() == "I?":
+        _hello(send)
 
 
 if __name__ == "__main__":

@@ -93,8 +93,8 @@ export function SurveyPanel({ device, lastEvent }: { device?: string; lastEvent?
 
       {error && (
         <p className="mt-3 rounded-lg border border-line bg-raised px-3 py-2 text-sm text-fg-2">
-          Backend not reachable — {error}. Start it with <span className="font-mono text-xs">npm run dev</span> in{' '}
-          <span className="font-mono text-xs">web/</span>.
+          Survey store not reachable — {error}. Start it with{' '}
+          <span className="font-mono text-xs">npm run dev</span> in <span className="font-mono text-xs">web/</span>.
         </p>
       )}
 

@@ -19,10 +19,6 @@
   --fall-soft: rgb(220 38 38 / 0.06);
   --fall-line: rgb(220 38 38 / 0.24);
   --check: #b45309;
-  --device-hi: #ffffff;
-  --device-lo: #e7e7e9;
-  --strap-hi: #e4e4e7;
-  --strap-lo: #d4d4d8;
 }
 
 /* Dark theme: graphite neutrals, the default for night shifts */
@@ -41,10 +37,6 @@
   --fall-soft: rgb(229 72 77 / 0.1);
   --fall-line: rgb(229 72 77 / 0.32);
   --check: #f0a43c;
-  --device-hi: #303033;
-  --device-lo: #1a1a1c;
-  --strap-hi: #2a2a2d;
-  --strap-lo: #1c1c1e;
 }
 
 @theme inline {

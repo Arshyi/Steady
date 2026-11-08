@@ -2,6 +2,7 @@ node_modules
 dist
 *.local
 .DS_Store
+server/.env
 
 # Python
 __pycache__/
@@ -11,8 +12,6 @@ __pycache__/
 web/.dev.vars
 web/.wrangler/
 web/.wrangler-dev.log
-__pycache__/
-*.pyc
 
 # firmware/steady host-test build output
 *.obj

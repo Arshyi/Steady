@@ -1,10 +1,17 @@
-import { movementSlots } from '../data/residents'
-
 /**
  * Movement through the night, one bar per half hour.
- * Earlier slots are neutral; the current slot gets the accent, or red when a fall happened in it.
+ * Earlier slots are neutral; the current slot gets the accent, or red when the resident has fallen.
+ * Empty slots (no readings) show no bar.
  */
-export function MovementChart({ values, fallInLastSlot }: { values: number[]; fallInLastSlot?: boolean }) {
+export function MovementChart({
+  values,
+  labels,
+  fallInLastSlot,
+}: {
+  values: (number | null)[]
+  labels: string[]
+  fallInLastSlot?: boolean
+}) {
   const last = values.length - 1
   const gridLines = [100, 50, 0]
 
@@ -26,12 +33,14 @@ export function MovementChart({ values, fallInLastSlot }: { values: number[]; fa
         {values.map((v, i) => {
           const color = i === last ? (fallInLastSlot ? 'bg-fall' : 'bg-accent') : 'bg-fg-3/35'
           return (
-            <div key={movementSlots[i]} className="flex h-full min-w-0 flex-1 items-end">
-              <div
-                className={`w-full rounded-t-[4px] ${color}`}
-                style={{ height: `${Math.max(v, 2)}%` }}
-                title={`${movementSlots[i]} · movement ${v}`}
-              />
+            <div key={i} className="flex h-full min-w-0 flex-1 items-end">
+              {v !== null && (
+                <div
+                  className={`w-full rounded-t-[4px] ${color}`}
+                  style={{ height: `${Math.max(v, 2)}%` }}
+                  title={`${labels[i]} · movement ${v}`}
+                />
+              )}
             </div>
           )
         })}
@@ -39,14 +48,12 @@ export function MovementChart({ values, fallInLastSlot }: { values: number[]; fa
 
       {/* Time labels */}
       <div className="absolute right-0 bottom-0 left-8 flex gap-2 px-1">
-        {movementSlots.map((t, i) => (
+        {labels.map((t, i) => (
           <span
-            key={t}
+            key={i}
             className={`min-w-0 flex-1 overflow-visible whitespace-nowrap text-center font-mono text-[11px] tabular-nums ${
-              i % 2 ? 'invisible sm:visible' : ''
-            } ${
-              i === last ? 'text-fg' : 'text-fg-3'
-            }`}
+              i % 2 && i !== last ? 'invisible sm:visible' : ''
+            } ${i === last ? 'text-fg' : 'text-fg-3'}`}
           >
             {t}
           </span>

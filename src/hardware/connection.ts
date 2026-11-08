@@ -1,24 +1,14 @@
-// Connects to a Steady wearable over Bluetooth, USB, the network, or a built-in simulator.
+// Connects to a Steady wearable over Bluetooth, USB, Wi-Fi, or a built-in simulator.
 // All of them give the same events, so the Settings page doesn't care which one is used.
 
-import {
-  STEADY_SERVICE,
-  CHAR,
-  CMD_IDENTIFY,
-  SERIAL_BAUD,
-  parseMotion,
-  parseNetworkMessage,
-  type MotionSample,
-} from './protocol'
+import { STEADY_SERVICE, CHAR, CMD_IDENTIFY, SERIAL_BAUD, WIFI_PORT, parseMotion, type MotionSample } from './protocol'
 
-export type Transport = 'bluetooth' | 'usb' | 'network' | 'simulated'
+export type Transport = 'bluetooth' | 'usb' | 'wifi' | 'simulated'
 
 /** How a survey capture ended, as reported by the board */
 export interface SurveySummary {
-  id?: number
   scans?: number
   accessPoints?: number
-  takenAt?: number
 }
 
 /** The room the backend matched to the board's Wi-Fi fingerprint */
@@ -35,10 +25,10 @@ export interface DeviceEvents {
   onFall: () => void
   onDisconnect: () => void
   /** The wearer pressed the button once: "I'm OK". */
-  onOk?: (at: number) => void
+  onOk?: () => void
   /** A staff member tapped an NFC tag on the wearable. */
-  onTap?: (tag: string, at: number) => void
-  /** The board finished a survey capture (three presses, or asked from here). */
+  onTap?: (tag: string) => void
+  /** The board finished a survey capture (three presses). */
   onSurvey?: (summary: SurveySummary) => void
   /** The backend placed the device in a room after a scan. */
   onLocation?: (location: KnownLocation) => void
@@ -53,8 +43,6 @@ export interface Connection {
 export const support = {
   bluetooth: typeof navigator !== 'undefined' && 'bluetooth' in navigator,
   usb: typeof navigator !== 'undefined' && 'serial' in navigator,
-  // The UNO Q serves WebSocket, which no browser lacks
-  network: typeof WebSocket !== 'undefined',
 }
 
 // ---------- Bluetooth ----------
@@ -175,100 +163,64 @@ function handleLine(line: string, ev: DeviceEvents) {
     case 'F':
       ev.onFall()
       break
+    case 'O':
+      ev.onOk?.()
+      break
+    case 'T':
+      if (parts[1]) ev.onTap?.(parts[1].trim())
+      break
+    case 'S':
+      ev.onSurvey?.({ scans: Number(parts[1]) || undefined, accessPoints: Number(parts[2]) || undefined })
+      break
+    case 'L':
+      if (parts[1]) {
+        ev.onLocation?.({
+          room: parts[1].trim(),
+          floor: parts[2]?.trim() || undefined,
+          confidence: Number(parts[3]) || undefined,
+        })
+      }
+      break
   }
 }
 
-// ---------- Network (Arduino UNO Q over WebSocket) ----------
+// ---------- Wi-Fi (UNO Q relay) ----------
 
 /**
- * Talks to `hardware/steady_unoq`, which runs on the UNO Q's Linux side and
- * broadcasts the MCU's samples as JSON text frames (see protocol.ts). Same
- * events as the other transports; the board can sit anywhere on the network.
+ * Connects to the relay running on the board's Linux side over a WebSocket.
+ * It speaks the same text lines as USB serial (see protocol.ts): I, M, F, O, T, S, L in;
+ * "I?" and "I" out. The board sends its own readings and falls to the server.
  */
-export async function connectNetwork(url: string, ev: DeviceEvents): Promise<Connection> {
-  const socket = new WebSocket(url)
-  let finished = false
+export async function connectWifi(address: string, ev: DeviceEvents): Promise<Connection> {
+  const host = address.trim().replace(/\/+$/, '')
+  const url = /^wss?:\/\//.test(host) ? host : `ws://${host}${/:\d+$/.test(host) ? '' : `:${WIFI_PORT}`}`
 
+  const ws = new WebSocket(url)
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      if (socket.readyState !== WebSocket.OPEN) {
-        socket.close()
-        reject(new Error(`No answer from ${url}. Is the UNO Q app running?`))
-      }
-    }, 6000)
-
-    socket.addEventListener(
-      'open',
-      () => {
-        clearTimeout(timer)
-        resolve()
-      },
-      { once: true },
-    )
-    socket.addEventListener(
-      'error',
-      () => {
-        clearTimeout(timer)
-        reject(new Error(`Could not connect to ${url}. Check the board's address and that the app is running.`))
-      },
-      { once: true },
-    )
-  })
-
-  socket.addEventListener('message', (event) => {
-    if (typeof event.data !== 'string') return
-    const message = parseNetworkMessage(event.data)
-    if (!message) return
-
-    switch (message.type) {
-      case 'hello':
-        ev.onInfo(message.device ?? 'ST-?', message.firmware ?? 'unknown')
-        break
-      case 'motion':
-        ev.onMotion({
-          t: performance.now(),
-          ax: message.ax,
-          ay: message.ay,
-          az: message.az,
-          gx: message.gx,
-          gy: message.gy,
-          gz: message.gz,
-        })
-        break
-      case 'fall':
-        ev.onFall()
-        break
-      case 'ok':
-        ev.onOk?.(message.t ?? Date.now())
-        break
-      case 'tap':
-        ev.onTap?.(message.tag ?? 'unknown', message.t ?? Date.now())
-        break
-      case 'survey':
-        ev.onSurvey?.(message)
-        break
-      case 'location':
-        ev.onLocation?.(message)
-        break
-      case 'error':
-        break
+      ws.close()
+      reject(new Error(`No answer from ${url}. Check the board is on and on the same Wi-Fi.`))
+    }, 5000)
+    ws.onopen = () => {
+      clearTimeout(timer)
+      resolve()
+    }
+    ws.onerror = () => {
+      clearTimeout(timer)
+      reject(new Error(`Couldn't connect to ${url}. Check the address and that the relay is running.`))
     }
   })
 
-  socket.addEventListener('close', () => {
-    if (finished) return
-    finished = true
-    ev.onDisconnect()
-  })
+  ws.onmessage = (e) => {
+    for (const line of String(e.data).split('\n')) handleLine(line.trim(), ev)
+  }
+  ws.onclose = () => ev.onDisconnect()
+  ws.send('I?\n')
 
   return {
-    transport: 'network',
-    identify: async () => socket.send(JSON.stringify({ type: 'identify' })),
-    disconnect: async () => {
-      finished = true
-      socket.close()
-      ev.onDisconnect()
-    },
+    transport: 'wifi',
+    identify: async () => ws.send('I\n'),
+    disconnect: async () => ws.close(),
   }
 }
 
@@ -299,15 +251,11 @@ export async function connectSimulated(ev: DeviceEvents): Promise<Connection> {
   // Simulated fall after 8 seconds so the fall check can pass
   const fallTimer = setTimeout(ev.onFall, 8000)
 
-  // The button and NFC paths, so the survey panel can be exercised without a board
-  const okTimer = setInterval(() => ev.onOk?.(Date.now()), 21_000)
-  const tapTimer = setInterval(() => ev.onTap?.('04A2339C1B80', Date.now()), 27_000)
+  // The button, the NFC tap (standing in for a tag until readers are fitted) and a survey
+  const okTimer = setInterval(() => ev.onOk?.(), 21_000)
+  const tapTimer = setInterval(() => ev.onTap?.('04A2339C1B80'), 27_000)
   const surveyTimer = setInterval(() => ev.onSurvey?.({ scans: 5, accessPoints: 8 }), 41_000)
-  // The network transport learns the room from the backend; here it is faked.
-  const locationTimer = setInterval(
-    () => ev.onLocation?.({ room: '103', floor: '1', confidence: 82 }),
-    13_000,
-  )
+  const locationTimer = setInterval(() => ev.onLocation?.({ room: '103', floor: '1', confidence: 82 }), 13_000)
 
   return {
     transport: 'simulated',
