@@ -96,4 +96,4 @@ gets dummy heart rate, battery and signal so its row is not half empty. This is
 what makes the UNO + accelerometer demo look like a working wing. Turn it off
 with `DEMO_FILL=0` to see only what the hardware actually sends.
 
-See `arduino/README.md` for wiring and upload steps.
+See `arduino/README.md` for MPU6050 wiring and upload steps.

@@ -306,8 +306,8 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable over Wi-Fi, or an Arduino UNO with an accelerometer over USB, to check the sensor is
-          working and pair it to a resident.
+          Connect a wearable over Wi-Fi, or an Arduino UNO with an MPU6050 over USB, to check its accelerometer and
+          gyroscope and pair it to a resident.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="board-address">
