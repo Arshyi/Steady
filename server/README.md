@@ -49,3 +49,41 @@ for what the real relay on the UNO Q has to do.
 
 `movement` is 0–100: the mean gyroscope magnitude in °/s divided by 2, capped at 100.
 Status thresholds are at the top of `state.ts`.
+
+## Running without Databricks
+
+If DATABRICKS_HOST and DATABRICKS_WAREHOUSE_ID are not set the server uses a
+local store instead: readings and alerts live in memory, and the data mode,
+pairings and firmware versions are kept in server/.data/local.json (ignored by
+git). Everything the dashboard shows, the ingest endpoint and the simulator work
+the same way, so the whole path can be run on one machine.
+
+## Wearable ingest
+
+The UNO Q posts the same batched JSON as web/src/worker.js to
+POST /api/v1/ingest (set "endpoint" in the device config):
+
+```jsonc
+{
+  "device": "ST-UNOQ1",
+  "firmware": "1.2.0",
+  "battery": 84,
+  "rssi": -61,
+  "samples": [{ "ts": 1730000000000, "ax": 0.02, "ay": 0.01, "az": 1.0, "gx": 1.2, "gy": 0.4, "gz": 0.1, "svm": 1.0004, "state": 1 }],
+  "events": [{ "peak_g": 6.0, "tilt_delta": 82, "confidence": 88 }]
+}
+```
+
+Samples at 10-200 Hz are folded into one reading per second; each event raises a
+fall alert with the peak g and posture change in its detail. If DEVICE_TOKEN is
+set, the device must send "Authorization: Bearer <token>". GET /api/v1/health
+reports which store is in use, and GET /api/devices lists every wearable the
+server has heard from so it can be paired in Settings.
+
+To simulate a wearable end to end:
+
+```sh
+npm run dev                 # dashboard + server
+npm run sim:device          # posts 10 Hz batches as ST-UNOQ1
+npm run sim:device -- --fall-every 90 --minutes 5
+```

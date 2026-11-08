@@ -121,3 +121,13 @@ wearables --BLE--> gateway per wing --Wi-Fi--> backend --> Databricks
 - UI changes follow the design guide in `.claude/skills/unslop`: calm grey interface, red only
   for falls, no glows or emoji, sentence case.
 - Never commit secrets (`.env`, tokens, Databricks credentials).
+
+## Where the device data goes
+
+The Python uplink posts to POST /api/v1/ingest on the Steady server with an
+Authorization: Bearer <token> header and X-Device-Id. The server stores one
+reading per second, raises a fall alert from each events[] entry, and shows the
+device in Settings under "Wearables reporting in" so it can be paired to a
+resident. GET /api/v1/health is an unauthenticated liveness check for the
+device config. npm run sim:device in the repo root posts the same payloads,
+which is the quickest way to check a change before flashing an UNO Q.

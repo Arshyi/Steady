@@ -459,6 +459,85 @@ function ConnectPanel() {
   )
 }
 
+// ---------- Wearables reporting in ----------
+
+interface SeenDevice {
+  id: string
+  firmware: string | null
+  firstSeen: string
+  lastSeen: string
+  pairedTo: { residentId: string; name: string; room: string } | null
+}
+
+function seenAgo(iso: string) {
+  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (sec < 5) return 'just now'
+  if (sec < 90) return sec + ' s ago'
+  if (sec < 5400) return Math.round(sec / 60) + ' min ago'
+  return Math.round(sec / 3600) + ' h ago'
+}
+
+/**
+ * The firmware posts straight to the server, so a wearable shows up here as
+ * soon as it comes online, before anyone pairs it to a resident.
+ */
+function DevicesSeen() {
+  const [devices, setDevices] = useState<SeenDevice[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const load = async () => {
+      try {
+        const res = await fetch('/api/devices')
+        if (res.ok && !cancelled) setDevices((await res.json()) as SeenDevice[])
+      } catch {
+        // Backend offline: keep the last list and try again.
+      }
+      if (!cancelled) timer = setTimeout(load, 5000)
+    }
+    load()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [])
+
+  return (
+    <section>
+      <h2 className="mb-1 text-base font-medium">Wearables reporting in</h2>
+      <p className="mb-3 text-sm text-fg-2">
+        Devices that have sent data to the server. Pair one below to give its readings to a resident.
+      </p>
+      <div className="overflow-hidden rounded-xl border border-line bg-card">
+        {devices && devices.length > 0 ? (
+          <ul>
+            {devices.map((d) => (
+              <li
+                key={d.id}
+                className="grid min-h-14 grid-cols-[1fr_1fr] items-center gap-x-4 border-b border-line px-4 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_104px_120px_1fr]"
+              >
+                <span className="truncate font-mono">{d.id}</span>
+                <span className="hidden font-mono tabular-nums text-fg-2 md:block">{d.firmware ?? "–"}</span>
+                <span className="hidden tabular-nums text-fg-2 md:block">{seenAgo(d.lastSeen)}</span>
+                <span className="truncate text-fg-2">
+                  {d.pairedTo ? "Room " + d.pairedTo.room + " · " + d.pairedTo.name : "Not paired"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-4 py-5 text-sm text-fg-2">
+            {devices === null
+              ? "Looking for wearables…"
+              : "No wearables yet. Power one on, or run npm run sim:device to pretend."}
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 // ---------- Device table ----------
 
 function deviceIssues(r: Resident) {
@@ -549,6 +628,7 @@ export function Settings() {
       <div className="mt-8 flex flex-col gap-8">
         <DataSource />
         <ConnectPanel />
+        <DevicesSeen />
         <DeviceTable />
       </div>
     </Page>
