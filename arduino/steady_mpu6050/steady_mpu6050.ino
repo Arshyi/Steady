@@ -13,9 +13,9 @@
 //   AD0 -> GND     (optional; most boards pull it low already)
 //
 // Keep the board still for the first second after reset: the sketch measures
-// the gyro's zero-rate offset then. Ranges are ±2 g and ±250 °/s, which is what
-// the dashboard expects; change ACCEL_LSB_PER_G / GYRO_LSB_PER_DPS if you edit
-// the configuration registers.
+// the gyro's zero-rate offset then. Ranges are ±8 g and ±250 °/s; readings are
+// sent in g and °/s, so the dashboard doesn't care which range is set. Change
+// ACCEL_LSB_PER_G / GYRO_LSB_PER_DPS if you edit the configuration registers.
 //
 // The MPU6050 is real, and so is fall detection: the board watches for
 // weightlessness, then a hard impact, then a change of posture (checkFall()).
@@ -44,8 +44,9 @@ const uint8_t REG_ACCEL_XOUT_H = 0x3B;
 const uint8_t REG_PWR_MGMT_1 = 0x6B;
 const uint8_t REG_WHO_AM_I = 0x75;
 
-// ±2 g and ±250 °/s, the chip's default full-scale ranges
-const float ACCEL_LSB_PER_G = 16384.0;
+// ±8 g, so hard landings aren't clipped (at ±2 g the 3.0 g hard-impact rule could
+// never fire), and ±250 °/s
+const float ACCEL_LSB_PER_G = 4096.0;
 const float GYRO_LSB_PER_DPS = 131.0;
 
 const unsigned long SAMPLE_MS = 20;   // how often an M line is printed
@@ -232,7 +233,7 @@ bool beginSensor() {
   delay(50);
   writeRegister(REG_CONFIG, 0x03);       // 44 Hz digital low-pass filter
   writeRegister(REG_GYRO_CONFIG, 0x00);  // ±250 °/s
-  writeRegister(REG_ACCEL_CONFIG, 0x00); // ±2 g
+  writeRegister(REG_ACCEL_CONFIG, 0x10); // ±8 g (AFS_SEL=2), matches ACCEL_LSB_PER_G
   delay(20);
   calibrateGyro();
   return true;
