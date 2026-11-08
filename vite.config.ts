@@ -6,7 +6,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     // The backend (server/) runs on 8787; the web app calls it through /api
-    proxy: { '/api': 'http://localhost:8787' },
+    // The backend (server/) normally runs on 8787. Set STEADY_API_TARGET when
+    // something else already owns that port (another checkout, wrangler dev).
+    proxy: { '/api': process.env.STEADY_API_TARGET ?? 'http://localhost:8787' },
     watch: {
       // web/ is a separate project (the Worker). `wrangler dev` rewrites its
       // local D1 and trace-store SQLite files on every request; without this,

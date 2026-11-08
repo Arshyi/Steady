@@ -16,7 +16,7 @@ server, the Cloudflare Worker, and how to run the demo.
 | Fall detection | **Real**, runs on the board, verified with drops |
 | Readings to dashboard to alerts | **Real**, over USB serial (Web Serial) |
 | Pairing a device to a resident | **Real** |
-| Wi-Fi relay (`hardware/steady_unoq`) | **Written, never run on hardware.** The board joins Wi-Fi and takes a DHCP lease, but the campus guest portal intercepts its traffic and the App Lab app was never installed |
+| Wi-Fi relay (`hardware/steady_unoq`) | **Real.** The App Lab app runs on the board, serves the protocol on `:8765`, streams the MPU6050 to the dashboard over the network, and posts one-second summaries to `server/` |
 | Heart rate, battery, signal | Dummy values from each resident's profile |
 | Other residents | Dummy `DEMO-<room>` stream so the wing looks awake |
 | Databricks storage | Implemented, selected by env vars; every run here used the local store |
@@ -33,6 +33,10 @@ MPU6050 ──I2C──► UNO Q (STM32, Zephyr) ──USB serial──► Dashb
 web/ is a separate Cloudflare Worker + D1: device ingest, server-side fall
 analysis, and the Wi-Fi survey/location store.
 ```
+
+The App Lab app publishes `8765` with a `ports:` list in `hardware/steady_unoq/app.yaml`;
+without it the relay listens only inside its Docker container and nothing on the
+network can reach it.
 
 The browser connection (USB or Wi-Fi) is for setup and diagnostics: one device,
 one screen. A whole wing runs through the server and the datastore.
@@ -269,20 +273,28 @@ python hardware/steady_unoq/tools/simulator.py --port 8765
 
 Then connect the dashboard over Wi-Fi to `127.0.0.1`.
 
-Status: this path is unproven on the board. It does join a network and takes a
-DHCP lease, but a campus guest network sits behind a Cisco ISE captive portal:
-until the device accepts the policy in a browser, every request comes back as the
-portal's redirect page, so it has no internet and no reachable port. Scripting the
-acceptance does not work (the portal's Accept button is JavaScript, and posting
-the form only opens a fresh session). The App Lab app has also never been
-installed: `~/ArduinoApps` is empty and `arduino-app-cli app list` shows only the
-bundled examples.
+Status: this path runs on the board. The UNO Q and the laptop are both on
+`ubcIoT` (WPA2-Personal from iot.ubc.ca, which does not isolate a user's own
+devices), the app is installed at `~/ArduinoApps/steady_unoq`, and the relay
+publishes `8765`. Verified: `ws://<board>:8765` answers `I,ST-UNOQ1,1.2.0` and
+then streams `M,…` lines sampled at ~48 Hz; `server_url` is set to the laptop's
+LAN address, so summaries reach `server/`; and the Settings page connects over
+Wi-Fi and shows live accelerometer and gyroscope values.
 
-To try the relay for real, put the board and the dashboard on a network without a
-captive portal or client isolation (a phone hotspot is easiest), install the app
-from App Lab, and set `server_url` and `survey_url` to that server's LAN address.
-The defaults are `127.0.0.1`, which on the board means the board itself, so
-uploads would go nowhere apart from one log line per outage.
+Two things in this app are easy to get wrong, and both were hit on the hardware:
+
+- **`ports:` in `app.yaml` takes plain integers** (`ports:` then `- 8765`). The
+  Compose-style `- "8765:8765"` string is rejected with
+  `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int`
+  and the app refuses to start.
+- **A4/A5 on the UNO Q is `Wire2`, not `Wire`.** The pins labelled SDA/SCL are
+  D20/D21 on plain `Wire`. The sketch probes both buses and keeps whichever
+  answers at `0x68`; a sketch that only calls `Wire.begin()` finds no IMU on A4/A5
+  and silently publishes nothing.
+
+Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
+board means the board itself, so uploads go nowhere). `survey_url` is separate and
+can stay empty until the Worker in `web/` is running somewhere the board can reach.
 
 **`firmware/steady/` — RTOS app with waveform capture.** A Zephyr build with a
 200 Hz sampler thread, a detector thread, an orientation filter, a per-fall
@@ -348,7 +360,11 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 | Gyro drifts slowly | The bias calibration ran while the board was moving. Reset it and leave it still for a second |
 | `Connect Arduino (USB)` is disabled | The browser has no Web Serial. Use Chrome or Edge on desktop |
 | Nothing reaches the dashboard | The data source must be **Live devices** and the device paired |
-| Board joins Wi-Fi but nothing connects | A captive portal or client isolation. `curl http://captive.apple.com/hotspot-detect.html` on the board returns the portal page; use a hotspot or a pre-shared-key network |
+| Board joins Wi-Fi but nothing connects | A captive portal or client isolation. `curl http://captive.apple.com/hotspot-detect.html` on the board returns the portal page; use a network where your own devices see each other |
+| `invalid library reference: Adafruit PN532 ()` | `sketch/sketch.yaml` lists a library that is not installed on the board. The NFC reader is optional: leave the entry out and the sketch compiles the NFC block out |
+| `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int` | `ports:` in `app.yaml` wants bare integers (`- 8765`), not `"8765:8765"` |
+| Relay logs `skipping`/no `M,…` lines, `ss -ltn` has no 8765 | Either `ports:` is missing from `app.yaml` or the sketch found no IMU. `docker logs steady_unoq-main-1` shows which |
+| Readings arrive but the server ignores them | `pair ST-UNOQ1 to a resident` — pair it in Settings → "Wearables reporting in" |
 
 ## Known limitations
 
@@ -363,7 +379,12 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 - **Databricks has not been exercised end to end** in this workspace; the local
   store has.
 - **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
-- **The Wi-Fi path has never run on the board.** It associates and gets a DHCP lease, but a captive portal currently blocks its traffic; only USB serial and the laptop simulator have been exercised.
+- **The Wi-Fi path runs, but only what was exercised is proven.** Wi-Fi join, the
+  relay on `:8765`, live readings to the dashboard, server summaries and pairing
+  have all run on the real board. Survey mode (three presses, Wi-Fi fingerprint,
+  room match), NFC taps and the `web/` Worker store have not: no reader is fitted,
+  the button has not been pressed on hardware, and the Worker was not reachable
+  from the board.
 - `web/` echoes any CORS origin, and `DEVICE_TOKEN` is shared by all devices.
   Restrict the origin and move to per-device tokens before deploying.
 

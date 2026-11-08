@@ -47,6 +47,16 @@ static constexpr uint32_t SAMPLE_HZ = 50;
 static constexpr uint32_t SAMPLE_MS = 1000 / SAMPLE_HZ;
 
 // ---- MPU6050 (I2C) --------------------------------------------------------
+// Which I2C bus the MPU6050 is on. On the UNO Q the pins labelled SDA/SCL are
+// D20/D21 (plain Wire), while A4/A5 are the board's third bus (Wire2), so both
+// are probed and the one that answers is kept. On older boards there is only one.
+#if defined(ARDUINO_ARCH_ZEPHYR)
+static TwoWire *imuBus = &Wire;
+static TwoWire *const imuAltBus = &Wire2;
+#else
+static TwoWire *imuBus = &Wire;
+static TwoWire *const imuAltBus = nullptr;
+#endif
 // Registers are only the ones this sketch touches.
 static constexpr uint8_t IMU_REG_CONFIG = 0x1A;
 static constexpr uint8_t IMU_REG_SMPLRT_DIV = 0x19;
@@ -139,20 +149,20 @@ bool steadyIdentify() {
 // ---- MPU6050 helpers ------------------------------------------------------
 
 bool imuWrite(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(imuAddress);
-  Wire.write(reg);
-  Wire.write(value);
-  return Wire.endTransmission() == 0;
+  imuBus->beginTransmission(imuAddress);
+  imuBus->write(reg);
+  imuBus->write(value);
+  return imuBus->endTransmission() == 0;
 }
 
 bool imuRead(uint8_t reg, uint8_t* buf, uint8_t len) {
-  Wire.beginTransmission(imuAddress);
-  Wire.write(reg);
-  if (Wire.endTransmission(false) != 0) return false;
-  if (Wire.requestFrom(imuAddress, len) != len) return false;
+  imuBus->beginTransmission(imuAddress);
+  imuBus->write(reg);
+  if (imuBus->endTransmission(false) != 0) return false;
+  if (imuBus->requestFrom(imuAddress, len) != len) return false;
   for (uint8_t i = 0; i < len; i++) {
-    if (Wire.available() == 0) return false;
-    buf[i] = (uint8_t)Wire.read();
+    if (imuBus->available() == 0) return false;
+    buf[i] = (uint8_t)imuBus->read();
   }
   return true;
 }
@@ -162,35 +172,45 @@ int16_t be16(const uint8_t* p) {
 }
 
 bool startImu() {
-  Wire.begin();
-  Wire.setClock(400000);
+  TwoWire* buses[2] = {&Wire, imuAltBus};
 
-  for (uint8_t i = 0; i < sizeof(IMU_ADDRESSES); i++) {
-    imuAddress = IMU_ADDRESSES[i];
+  for (uint8_t a = 0; a < sizeof(IMU_ADDRESSES); a++) {
+    for (uint8_t b = 0; b < 2; b++) {
+      if (buses[b] == nullptr) continue;
+      imuAddress = IMU_ADDRESSES[a];
+      imuBus = buses[b];
 
-    uint8_t who = 0;
-    if (!imuRead(IMU_REG_WHO_AM_I, &who, 1)) continue;
-    // 0x98 and 0x72 are clones that behave like an MPU6050 for these registers
-    if (who != 0x68 && who != 0x98 && who != 0x72) continue;
+      imuBus->begin();
+      imuBus->setClock(400000);
+      imuBus->beginTransmission(imuAddress);
+      if (imuBus->endTransmission() != 0) continue;
 
-    // Reset, then wake on the X-gyro PLL
-    if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x80)) continue;
-    delay(100);
-    if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x01)) continue;
+      uint8_t who = 0;
+      if (!imuRead(IMU_REG_WHO_AM_I, &who, 1)) continue;
+      // 0x98 and 0x72 are clones that behave like an MPU6050 for these registers
+      if (who != 0x68 && who != 0x98 && who != 0x72) continue;
 
-    imuWrite(IMU_REG_SMPLRT_DIV, 19);   // 1 kHz base rate / 20 = 50 Hz
-    imuWrite(IMU_REG_CONFIG, 0x03);     // DLPF, ~44 Hz accelerometer bandwidth
-    imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // ±500 °/s
-    imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // ±2 g
+      // Reset, then wake on the X-gyro PLL
+      if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x80)) continue;
+      delay(100);
+      if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x01)) continue;
 
-    Monitor.print("[steady] MPU6050 online at 0x");
-    Monitor.print(imuAddress, HEX);
-    Monitor.print(", WHO_AM_I 0x");
-    Monitor.println(who, HEX);
-    return true;
+      imuWrite(IMU_REG_SMPLRT_DIV, 19);     // 1 kHz base rate / 20 = 50 Hz
+      imuWrite(IMU_REG_CONFIG, 0x03);       // DLPF, ~44 Hz accelerometer bandwidth
+      imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // +/-500 deg/s
+      imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // +/-2 g
+
+      Monitor.print("[steady] MPU6050 online at 0x");
+      Monitor.print(imuAddress, HEX);
+      Monitor.print(" on ");
+      Monitor.print(imuBus == imuAltBus ? "A4/A5 (Wire2)" : "SDA/SCL (Wire)");
+      Monitor.print(", WHO_AM_I 0x");
+      Monitor.println(who, HEX);
+      return true;
+    }
   }
 
-  Monitor.println("[steady] no MPU6050 on A4/A5 (0x68 or 0x69), retrying");
+  Monitor.println("[steady] no MPU6050 on A4/A5 or SDA/SCL (0x68/0x69), retrying");
   return false;
 }
 

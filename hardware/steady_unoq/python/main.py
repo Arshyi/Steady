@@ -57,15 +57,15 @@ from steady_net import WebSocketServer  # noqa: E402
 CONFIG = {
     # Shown on the Settings page when a browser connects
     "device_id": "ST-UNOQ1",
-    "firmware": "1.1.0",
+    "firmware": "1.2.0",
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,
     # The Databricks backend (server/). Leave empty to send readings nowhere.
     #   "server_url": "http://192.168.1.20:8787"
-    "server_url": "http://127.0.0.1:8787",
+    "server_url": "http://10.200.3.118:8787",
     # The survey store (web/). Needs the view key from web/.dev.vars.
-    "survey_url": "http://127.0.0.1:8788",
+    "survey_url": "",
     "survey_key": "dev-view-key",
     # Survey mode: how many scans make up one room fingerprint
     "survey_scans": 5,
