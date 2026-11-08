@@ -49,6 +49,25 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [offline, setOffline] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  // Clicks the server hasn't confirmed yet. Laid over every poll so an older reply can't undo them.
+  const pending = useRef(new Map<string, { handled: boolean; at: number }>())
+
+  const withPending = (next: ApiState): ApiState => {
+    if (!pending.current.size) return next
+    return {
+      ...next,
+      alerts: next.alerts.map((a) => {
+        const p = pending.current.get(a.id)
+        if (!p) return a
+        // The server agrees now, or it's taking too long: stop overriding
+        if (!!a.handledAt === p.handled || Date.now() - p.at > 30_000) {
+          pending.current.delete(a.id)
+          return a
+        }
+        return { ...a, handledAt: p.handled ? new Date(p.at).toISOString() : null }
+      }),
+    }
+  }
 
   const load = useCallback(async () => {
     clearTimeout(timer.current)
@@ -56,7 +75,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
       const res = await fetch('/api/state')
       if (!res.ok) throw new Error(`Backend returned ${res.status}`)
       const next: ApiState = await res.json()
-      setData(next)
+      setData(withPending(next))
       setOffline(null)
       if (next.updatedAt) setLoaded(true)
     } catch {
@@ -71,8 +90,20 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, [load])
 
   // Show a change straight away, then confirm with the server
-  const patchAlert = (id: string, handledAt: string | null) =>
+  const setAlert = async (id: string, handled: boolean) => {
+    const at = Date.now()
+    pending.current.set(id, { handled, at })
+    const handledAt = handled ? new Date(at).toISOString() : null
     setData((d) => ({ ...d, alerts: d.alerts.map((a) => (a.id === id ? { ...a, handledAt } : a)) }))
+    try {
+      await post(`/api/alerts/${id}/${handled ? 'handle' : 'undo'}`)
+    } catch (e) {
+      // Saving failed, so show the server's version again
+      console.error('Could not update alert', e)
+      if (pending.current.get(id)?.at === at) pending.current.delete(id)
+    }
+    load()
+  }
 
   const value: Live = {
     ...data,
@@ -80,16 +111,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     offline,
     active: data.alerts.filter((a) => !a.handledAt),
     findResident: (id) => data.residents.find((r) => r.id === id),
-    handle: async (id) => {
-      patchAlert(id, new Date().toISOString())
-      await post(`/api/alerts/${id}/handle`)
-      load()
-    },
-    undo: async (id) => {
-      patchAlert(id, null)
-      await post(`/api/alerts/${id}/undo`)
-      load()
-    },
+    handle: (id) => setAlert(id, true),
+    undo: (id) => setAlert(id, false),
     pair: async (residentId, deviceId, firmware) => {
       await post('/api/pairings', { residentId, deviceId, firmware })
       load()
