@@ -109,6 +109,22 @@ class FallDetector {
     float c = (ax * bx + ay * by + az * bz) / (na * nb);
     if (c > 1.0f) c = 1.0f;
     if (c < -1.0f) c = -1.0f;
-    return acosf(c) * 57.29578f;
+    return acosApprox(c) * 57.29578f;
+  }
+
+  /**
+   * acos(x) in radians, within ~0.004° (Abramowitz & Stegun 4.4.45). Used instead
+   * of acosf, which the UNO Q build failed to link (it pulls in C library code
+   * the board doesn't provide). sqrtf links fine.
+   */
+  static float acosApprox(float x) {
+    const bool negative = x < 0;
+    if (negative) x = -x;
+    float r = -0.0187293f;
+    r = r * x + 0.0742610f;
+    r = r * x - 0.2121144f;
+    r = r * x + 1.5707288f;
+    r = r * sqrtf(1.0f - x);
+    return negative ? 3.14159265f - r : r;
   }
 };
