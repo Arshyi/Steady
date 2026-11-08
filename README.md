@@ -296,6 +296,28 @@ Set `server_url` to the server's LAN address before installing (`127.0.0.1` on t
 board means the board itself, so uploads go nowhere). `survey_url` is separate and
 can stay empty until the Worker in `web/` is running somewhere the board can reach.
 
+**Autostart after a reboot.** The App CLI daemon
+(`arduino-app-cli.service`) starts at boot, but it does not start apps: a board
+that reboots leaves `:8765` closed until someone runs
+`arduino-app-cli app start` by hand. The `arduino` user's crontab starts the app
+instead, which needs no elevated privileges:
+
+```bash
+crontab -l        # on the board, as arduino; should show:
+@reboot /home/arduino/steady-autostart.sh
+```
+
+`~/steady-autostart.sh` waits for the daemon on `:8800`, runs
+`arduino-app-cli app start /home/arduino/ArduinoApps/steady_unoq`, retries until
+`:8765` answers, and appends to `~/steady-autostart.log`. It exits immediately when
+the relay is already listening, so it is safe to run by hand. The board gives
+`arduino` only a few specific passwordless root commands, and none of them reboot,
+so `adb reboot`, `systemctl reboot` and `reboot` all fail; a power cycle is the only
+way to boot it. Verified by stopping the app, then running the `@reboot` command
+with `env -i` (the environment cron gives it): the relay came back and streamed
+within about 45 seconds. A full power cycle has not been run since this was
+installed.
+
 **`firmware/steady/` — RTOS app with waveform capture.** A Zephyr build with a
 200 Hz sampler thread, a detector thread, an orientation filter, a per-fall
 waveform ring buffer, and a Python uplink that spools to disk while the network is
