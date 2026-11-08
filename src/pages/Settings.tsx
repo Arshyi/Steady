@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bluetooth, Usb, Wifi, Check, Circle, Lightbulb } from 'lucide-react'
+import { Wifi, Check, Circle, Lightbulb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
-import { connectBluetooth, connectUsb, connectWifi, connectSimulated, support, type Connection, type Transport } from '../hardware/connection'
+import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
 
@@ -13,8 +13,6 @@ const TRACE_MS = 5000
 const SEND_EVERY_MS = 1000
 
 const transportLabel: Record<Transport, string> = {
-  bluetooth: 'Connected over Bluetooth',
-  usb: 'Connected over USB',
   wifi: 'Connected over Wi-Fi',
   simulated: 'Demo device',
 }
@@ -269,19 +267,9 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      const c =
-        kind === 'bluetooth'
-          ? await connectBluetooth(events)
-          : kind === 'usb'
-            ? await connectUsb(events)
-            : kind === 'wifi'
-              ? await connectWifi(address, events)
-              : await connectSimulated(events)
-      setConn(c)
+      setConn(kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events))
     } catch (e) {
-      // Closing the browser's picker counts as an error; don't show that one
-      const msg = e instanceof Error ? e.message : String(e)
-      if (!/cancel|No port selected|User cancelled/i.test(msg)) setError(msg)
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
@@ -296,8 +284,8 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable to check its sensors are working and pair it to a resident. For the UNO Q, use Wi-Fi.
-          Bluetooth and USB work in Chrome or Edge on a computer or Android tablet.
+          Connect a wearable over Wi-Fi to check its sensors are working and pair it to a resident. The board must be
+          on the same network as this computer.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="board-address">
@@ -319,24 +307,6 @@ function ConnectPanel() {
             <Wifi className="h-4 w-4" strokeWidth={1.5} />
             Connect over Wi-Fi
           </button>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-3">
-          <button
-            disabled={!support.bluetooth || busy}
-            onClick={() => start('bluetooth')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm font-medium text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
-          >
-            <Bluetooth className="h-4 w-4" strokeWidth={1.5} />
-            Connect over Bluetooth
-          </button>
-          <button
-            disabled={!support.usb || busy}
-            onClick={() => start('usb')}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm font-medium text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
-          >
-            <Usb className="h-4 w-4" strokeWidth={1.5} />
-            Connect over USB
-          </button>
           <button
             disabled={busy}
             onClick={() => start('simulated')}
@@ -345,12 +315,6 @@ function ConnectPanel() {
             Try a demo device
           </button>
         </div>
-        {(!support.bluetooth || !support.usb) && (
-          <p className="mt-3 text-xs text-fg-3">
-            This browser doesn't support {!support.bluetooth && !support.usb ? 'Bluetooth or USB' : !support.bluetooth ? 'Bluetooth' : 'USB'}{' '}
-            connections. Use Chrome or Edge.
-          </p>
-        )}
         {error && <p className="mt-3 text-sm text-fall">{error}</p>}
       </section>
     )
