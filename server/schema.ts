@@ -36,7 +36,7 @@ export async function setupSchema() {
 
   // Tables created before handled_by existed need the column adding once
   await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (handled_by STRING)`).catch(() => {})
-  // A worker response now downgrades a fall instead of closing it, so the ack needs its own columns
+  // When a worker responded from the wearable (the press also resolves the fall)
   await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (acknowledged_at TIMESTAMP, acknowledged_by STRING)`).catch(() => {})
 
   await sql(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.app_settings (key STRING, value STRING)`)

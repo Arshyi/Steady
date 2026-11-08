@@ -568,8 +568,11 @@ export async function acknowledgeDevice(deviceId: string): Promise<AckResult | n
     .filter((a) => a.residentId === residentId && a.kind === 'fall' && !a.handledAt && a.source === currentSource())
     .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))[0]
   if (newest) {
+    // A press on the wearable resolves the fall: it moves to Handled tonight, "Worker responded"
     newest.acknowledgedAt = iso(Date.now())
     newest.acknowledgedBy = "Worker responded"
+    newest.handledAt = newest.acknowledgedAt
+    newest.handledBy = "Worker responded"
     refreshSoon()
   }
   return { residentId, alertId: newest?.id ?? null, acknowledgedBy: "Worker responded" }

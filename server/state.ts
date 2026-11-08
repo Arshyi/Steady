@@ -409,8 +409,8 @@ async function flush() {
 }
 
 /**
- * A worker confirmed they responded: downgrade that resident's newest open fall
- * and record the confirmation, leaving the alert open for staff.
+ * A worker confirmed they responded: record it on that resident's newest open fall
+ * and resolve the fall (Handled tonight, "Worker responded"). Undo reopens it.
  */
 export async function acknowledgeDevice(deviceId: string): Promise<AckResult | null> {
   pairingCache.delete(deviceId)
@@ -426,7 +426,11 @@ export async function acknowledgeDevice(deviceId: string): Promise<AckResult | n
   )
   const alertId = rows[0] ? String(rows[0].alert_id) : null
 
-  if (alertId) await saveAck(alertId, new Date().toISOString(), by)
+  if (alertId) {
+    // A press on the wearable resolves the fall: it moves to Handled tonight, "Worker responded"
+    await saveAck(alertId, new Date().toISOString(), by)
+    await handleAlert(alertId, true, by)
+  }
   return { residentId, alertId, acknowledgedBy: by }
 }
 
