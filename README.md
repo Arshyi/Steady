@@ -129,6 +129,32 @@ The board splits I2C across three buses, which is why the wiring is confusing:
 The sketch probes `Wire` and then `Wire2` and keeps whichever answers at `0x68`, so
 either wiring works. It reports the winner in the serial log.
 
+### Wiring the button
+
+The button's two legs go to **D2** and **D4**. No GND wire is needed: the sketch
+drives D4 low and holds D2 up through its pull-up, so a press shorts the two and D2
+reads LOW.
+
+| Button leg | Pin |
+| --- | --- |
+| A | D2 (pulled up, read) |
+| B | D4 (driven low) |
+
+Either leg order works - a button is not polarised. The same sketch also runs with
+the old D2-to-GND wiring, because D4 idling low changes nothing.
+
+| Gesture | Result |
+| --- | --- |
+| One press | "I'm OK": the relay posts an ack and the dashboard shows it |
+| Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
+| Two presses | Ignored as a fumbled double tap |
+
+A gesture is decided after 650 ms with no further press, so a single press reports
+shortly after you release rather than instantly. Presses are debounced for 25 ms.
+
+D4 is shared with the optional PN532 reader's reset line, so move that jumper to a
+free pin if you fit the reader.
+
 ### Flash the sketch
 
 1. Open `arduino/steady_mpu6050/steady_mpu6050.ino` in the Arduino IDE.
@@ -292,7 +318,7 @@ MPU6050 and detects falls; the Debian side (`python/main.py`) serves the protoco
 over `ws://0.0.0.0:8765` and posts a one-second summary to `/api/readings`, falls to
 `/api/falls`, and "I'm OK"/NFC taps to `/api/acks`. It also runs survey mode: three
 button presses scan Wi-Fi and post fingerprints to the Worker, and later scans are
-matched to a room and stored as a location. A button on D2 (to GND) and an optional
+matched to a room and stored as a location. A button across D2 and D4 and an optional
 PN532 on the same I2C bus are supported; no reader is fitted yet, so tag taps are
 dummy unless `dummy_nfc_every_s` is set.
 
@@ -309,7 +335,7 @@ Then connect the dashboard over Wi-Fi to `127.0.0.1`.
 The UNO Q and the laptop are both on `ubcIoT` (WPA2-Personal from iot.ubc.ca, which
 does not isolate a user's own devices), the app is installed at
 `~/ArduinoApps/steady_unoq`, and the relay publishes `8765`. Verified:
-`ws://<board>:8765` answers `I,ST-UNOQ1,1.2.0` and then streams `M,…` lines sampled
+`ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1` and then streams `M,…` lines sampled
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
 and gyroscope values.
@@ -425,6 +451,7 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 | `invalid library reference: Adafruit PN532 ()` | `sketch/sketch.yaml` lists a library that is not installed on the board. The NFC reader is optional: leave the entry out and the sketch compiles the NFC block out |
 | `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int` | `ports:` in `app.yaml` wants bare integers (`- 8765`), not `"8765:8765"` |
 | Relay logs `skipping`/no `M,…` lines, `ss -ltn` has no 8765 | Either `ports:` is missing from `app.yaml` or the sketch found no IMU. `docker logs steady_unoq-main-1` shows which |
+| Button does nothing | It must straddle D2 and D4, and D4 must not be driven by another device (the optional PN532 reset). Check nothing else is wired to D4 |
 | Readings arrive but the server ignores them | `pair ST-UNOQ1 to a resident` — pair it in Settings → "Wearables reporting in" |
 
 ## Known limitations

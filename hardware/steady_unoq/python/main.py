@@ -57,7 +57,7 @@ from steady_net import WebSocketServer  # noqa: E402
 CONFIG = {
     # Shown on the Settings page when a browser connects
     "device_id": "ST-UNOQ1",
-    "firmware": "1.2.0",
+    "firmware": "1.2.1",
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,

@@ -16,7 +16,8 @@
 // two more are not coming.
 //
 // Wiring: MPU6050 SDA→A4, SCL→A5, VCC→3V3, GND→GND (address 0x68 with AD0 low,
-// 0x69 with AD0 high — both are tried). The button sits between D2 and GND.
+// 0x69 with AD0 high — both are tried). The button sits across D2 and D4: D4 is
+// held low and D2 is pulled up, so a press reads LOW without a GND wire.
 //
 // The NFC reader (PN532, I2C, 0x24) is still optional and not fitted yet: install
 // the Adafruit PN532 library in App Lab and it is picked up automatically. With
@@ -40,7 +41,7 @@
 // ---- identity -------------------------------------------------------------
 // Give every device its own ID before flashing; the dashboard pairs on it.
 static const char* DEVICE_ID = "ST-UNOQ1";
-static const char* FIRMWARE = "1.2.0";
+static const char* FIRMWARE = "1.2.1";
 
 // ---- sampling -------------------------------------------------------------
 static constexpr uint32_t SAMPLE_HZ = 50;
@@ -79,8 +80,11 @@ static constexpr float IMPACT_ALONE_G = 3.5f;    // hard hit with no free fall s
 static constexpr uint32_t REFRACTORY_MS = 3000;  // one alert per 3 s
 
 // ---- button gestures ------------------------------------------------------
-// Wire the button between D2 and GND; INPUT_PULLUP means a press reads LOW.
+// The button sits across D2 and D4. D4 is driven low and D2 held high through its
+// pull-up, so a press shorts the two and reads LOW on D2. Wiring D2 to GND instead
+// also works: D4 then simply idles low and the press pulls D2 to ground either way.
 static constexpr uint8_t BUTTON_PIN = 2;
+static constexpr uint8_t BUTTON_COMMON_PIN = 4;
 static constexpr uint32_t BUTTON_DEBOUNCE_MS = 25;
 static constexpr uint32_t GESTURE_GAP_MS = 650;    // quiet time that ends a gesture
 static constexpr uint32_t GESTURE_WINDOW_MS = 2500; // presses must fit in this
@@ -88,6 +92,8 @@ static constexpr uint8_t SURVEY_PRESSES = 3;
 
 // ---- NFC ------------------------------------------------------------------
 static constexpr uint8_t NFC_IRQ_PIN = 3;
+// D4 is the button's second leg, so a fitted PN532 must not also use it for reset:
+// move this pin (and the jumper) to a free digital pin when the reader goes in.
 static constexpr uint8_t NFC_RESET_PIN = 4;
 static constexpr uint32_t NFC_POLL_MS = 250;
 static constexpr uint32_t NFC_REPEAT_MS = 4000;  // same tag resting on the reader
@@ -387,6 +393,9 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, HIGH);  // off
 
+  // Button: the second leg is D4, not GND. Drive it low, then read D2 against it.
+  pinMode(BUTTON_COMMON_PIN, OUTPUT);
+  digitalWrite(BUTTON_COMMON_PIN, LOW);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   Bridge.begin();
