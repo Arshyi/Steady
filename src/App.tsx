@@ -8,6 +8,7 @@ import { Residents } from './pages/Residents'
 import { Settings } from './pages/Settings'
 import { Register } from './pages/Register'
 import { Staff } from './pages/Staff'
+import { Demo } from './pages/Demo'
 
 export default function App() {
   return (
@@ -16,6 +17,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/register" element={<Register />} />
+          {/* Demo reset tools; the server only allows them from this computer */}
+          <Route path="/demo" element={<Demo />} />
           <Route
             element={
               <RequireLogin>

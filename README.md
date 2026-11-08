@@ -68,7 +68,7 @@ them. No GND wire is needed.
 
 | Gesture | Result |
 | --- | --- |
-| One press | Worker confirms they responded: the fall drops to the lowest urgency and stays open |
+| One press | Worker confirms they responded: resolves the open fall (Handled tonight, "Worker responded") |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
 
@@ -76,15 +76,18 @@ A gesture is decided after 650 ms with no further press; presses are debounced 2
 
 ### Fall detection
 
-The board samples at 200 Hz and decides for itself:
+Both sketches use the same rules (`hardware/steady_unoq/sketch/fall_detector.h`,
+host-tested by `tools/fall_detector_test.cpp`), checked every 5 ms at ±8 g:
 
 - weightless: `|a|` under 0.60 g
-- impact: over 1.8 g within 1.2 s, or over 3.0 g even when landing flat
-- posture change of 40 degrees or more raises confidence
+- impact: over 1.8 g within 1.2 s
+- after 250 ms of settling: a posture change of 40° or more, or an impact of 3.0 g or
+  more even when it lands flat
 
-It prints `F,peak,tilt,confidence`; the dashboard turns that into an alert. Printing
-happens at about 40 Hz, and sampling at that rate is why a drop can be missed. Tune
-thresholds on deliberate drops onto a mat before showing anyone an alert.
+A soft drop that lands flat is not counted. The Wi-Fi sketch hands the fall to the
+relay as `ms,peak,freefall_ms,tilt`, and the alert reads e.g. "Fall detected by the
+device: peak 2.2 g, posture change 89°". Tune thresholds on deliberate drops onto a
+mat before showing anyone an alert.
 
 ### Flashing
 
@@ -101,17 +104,18 @@ arduino-cli upload  -b arduino:zephyr:unoq -p COM4 arduino/steady_mpu6050
 
 ## Triage
 
-A fall stays on the Alerts page until a member of staff clicks **Mark checked**. A
-worker pressing the button only moves it down the list.
+A fall stays on the Alerts page until it is resolved: a member of staff clicks **Mark
+checked**, or a worker presses the wearable's button once. A press moves the fall to
+*Handled tonight* as "Worker responded"; **Undo** reopens it.
+
+While a fall is open it is ranked:
 
 | Urgency | What happened | Badge |
 | --- | --- | --- |
 | Highest | Fell, nothing moved since | No movement since the fall |
 | Middle | Fell, no worker has confirmed | No worker yet |
-| Lowest | Fell, a worker confirmed they responded | Worker responded |
 
-The highest tier wins even after a press: lying still matters more than a response.
-Movement must come from the device, so demo fill cannot clear it.
+Movement must come from the device, so demo fill cannot clear the highest tier.
 
 ## Dashboard
 
@@ -189,8 +193,13 @@ Verified on the real board: `ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1`, stre
 `M,...` at about 48 Hz, and the dashboard connects over Wi-Fi.
 
 - `app.yaml` needs plain integer ports (`- 8765`), not `"8765:8765"`.
-- Set `server_url` to the laptop's LAN address before installing; `127.0.0.1` on the
-  board means the board itself.
+- Set the server address in `python/config.json` (copy `config.example.json`; it is
+  git-ignored so each laptop keeps its own): `server_url` is the laptop's LAN address,
+  port 8787. `127.0.0.1` on the board means the board itself. The relay prints the
+  address it uses at startup; `STEADY_SERVER_URL` overrides the file.
+- If the server runs in WSL, turn on mirrored networking (`[wsl2]` /
+  `networkingMode=mirrored` in `%UserProfile%\.wslconfig`, then `wsl --shutdown`) and
+  allow port 8787 through the firewall, or the board can't reach it.
 - The `arduino` user's crontab runs `~/steady-autostart.sh` at reboot; App Lab's
   daemon does not start apps.
 - Survey scanning cannot work inside the App Lab container: no `nmcli`, `iw` or

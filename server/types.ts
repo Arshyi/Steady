@@ -8,6 +8,8 @@ export interface ResidentView {
   id: string
   name: string
   room: string
+  /** Added by staff for a real wearable (live mode). False for the built-in demo residents. */
+  manual: boolean
   status: Status
   note: string | null
   lastMovementMin: number | null
@@ -99,4 +101,16 @@ export interface Backend {
   listDevices(): DeviceInfo[]
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>
+  addResident(name: string, room: string | null): Promise<{ id: string; name: string; room: string }>
+  /** Demo tools: what live mode holds right now */
+  liveCounts(): Promise<LiveCounts>
+  /** Demo tools: remove staff-added residents, pairings and live alerts (and live readings if asked) */
+  resetLive(options: { readings: boolean }): Promise<LiveCounts>
+}
+
+export interface LiveCounts {
+  residents: number
+  pairings: number
+  alerts: number
+  readings: number
 }

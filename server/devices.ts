@@ -25,6 +25,11 @@ export function touchDevice(id: string, firmware: string | null) {
   seen.set(id, { id, firmware, firstSeen: now, lastSeen: now })
 }
 
+/** Forget every device (demo reset); ones still sending reappear within seconds */
+export function forgetDevices() {
+  seen.clear()
+}
+
 /** Everything heard from, most recently seen first */
 export function listSeen(): SeenDevice[] {
   return [...seen.values()].sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))

@@ -36,7 +36,7 @@ export async function setupSchema() {
 
   // Tables created before handled_by existed need the column adding once
   await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (handled_by STRING)`).catch(() => {})
-  // A worker response now downgrades a fall instead of closing it, so the ack needs its own columns
+  // When a worker responded from the wearable (the press also resolves the fall)
   await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (acknowledged_at TIMESTAMP, acknowledged_by STRING)`).catch(() => {})
 
   await sql(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.app_settings (key STRING, value STRING)`)
@@ -58,7 +58,8 @@ export async function setupSchema() {
  */
 export async function insertAlerts(rows: string[]) {
   if (!rows.length) return
-  await sql(`INSERT INTO ${SCHEMA}.alerts
+  // Name the columns: the table has grown (acknowledged_at/by), and the rest default to NULL
+  await sql(`INSERT INTO ${SCHEMA}.alerts (alert_id, resident_id, kind, raised_at, detail, handled_at, source, handled_by)
     SELECT uuid(), resident_id, kind, CAST(raised_at AS TIMESTAMP), detail, CAST(handled_at AS TIMESTAMP), source, handled_by
     FROM VALUES ${rows.join(', ')} AS t(resident_id, kind, raised_at, detail, handled_at, source, handled_by)`)
 }
