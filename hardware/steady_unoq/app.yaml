@@ -1,0 +1,4 @@
+name: steady_unoq
+description: "Steady wearable - MPU6050 accelerometer and gyroscope, fall detection on the MCU, WebSocket feed and server relay for the dashboard"
+icon: "📡"
+version: "1.1.0"

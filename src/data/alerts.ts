@@ -8,6 +8,8 @@ export interface Alert {
   detail: string
   /** Set when a staff member has dealt with it (ISO) */
   handledAt: string | null
+  /** Who cleared it, when it wasn't the dashboard: "I'm OK button", "NFC tag 1B80" */
+  handledBy?: string | null
 }
 
 export const kindLabel: Record<AlertKind, string> = {

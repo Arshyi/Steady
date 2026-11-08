@@ -2,4 +2,18 @@ node_modules
 dist
 *.local
 .DS_Store
-.env
+server/.env
+server/.data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Steady worker locals
+web/.dev.vars
+web/.wrangler/
+web/.wrangler-dev.log
+
+# firmware/steady host-test build output
+*.obj
+firmware/steady/build/

@@ -12,13 +12,13 @@ export const WAREHOUSE_ID = process.env.DATABRICKS_WAREHOUSE_ID ?? ''
 /** catalog.schema the Steady tables live in */
 export const SCHEMA = process.env.DATABRICKS_SCHEMA ?? 'workspace.steady'
 
-if (!HOST || !WAREHOUSE_ID) {
-  throw new Error('Set DATABRICKS_HOST and DATABRICKS_WAREHOUSE_ID in server/.env (see server/.env.example)')
-}
+/** True when server/.env has what the SQL Statement API needs */
+export const configured = Boolean(HOST && WAREHOUSE_ID)
 
 let cached: { token: string; expires: number } | undefined
 
 async function token(): Promise<string> {
+  if (!configured) throw new Error('Set DATABRICKS_HOST and DATABRICKS_WAREHOUSE_ID in server/.env (see server/.env.example)')
   if (cached && Date.now() < cached.expires - 60_000) return cached.token
   const { stdout } = await run('databricks', ['auth', 'token', '--host', HOST, '-o', 'json'])
   const d = JSON.parse(stdout) as { access_token: string; expiry: string }

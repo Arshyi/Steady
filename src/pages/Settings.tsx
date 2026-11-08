@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Wifi, Check, Circle, Lightbulb } from 'lucide-react'
+import { Wifi, Check, Circle, Lightbulb, Usb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
+import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
-import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
+import { connectWifi, connectSimulated, type Connection, type FallDetail, type Transport } from '../hardware/connection'
+import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
 
@@ -14,6 +16,7 @@ const SEND_EVERY_MS = 1000
 
 const transportLabel: Record<Transport, string> = {
   wifi: 'Connected over Wi-Fi',
+  serial: 'Arduino UNO over USB',
   simulated: 'Demo device',
 }
 
@@ -36,6 +39,10 @@ function savedAddress() {
   } catch {
     return 'unoq.local'
   }
+}
+
+function stamp() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 // ---------- Data source ----------
@@ -196,6 +203,8 @@ function ConnectPanel() {
   const [residentId, setResidentId] = useState('')
   const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
   const [address, setAddress] = useState(savedAddress)
+  // "I'm OK", an NFC tap, a survey or a room match, as the board reported it
+  const [lastEvent, setLastEvent] = useState<string>()
 
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
   const buffer = useRef<MotionSample[]>([])
@@ -236,6 +245,7 @@ function ConnectPanel() {
     setError(undefined)
     setBusy(true)
     setSent({ ok: 0 })
+    setLastEvent(undefined)
     buffer.current = []
     devRef.current = { ...emptyDevice }
     setDev(devRef.current)
@@ -250,12 +260,27 @@ function ConnectPanel() {
         const moved = Math.hypot(s.gx, s.gy, s.gz) > 30
         update({ sample: s, gyroMoved: devRef.current.gyroMoved || moved })
       },
-      onFall: () => {
+      onFall: (detail?: FallDetail) => {
         update({ fallSeen: true })
-        // Fast path: falls go straight to the server
+        // Fast path: falls go straight to the server, with what the board measured
         if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
-          post('/api/falls', { deviceId: devRef.current.id }).catch(() => {})
+          post('/api/falls', { deviceId: devRef.current.id, detail }).catch(() => {})
+        const measured = [
+          detail?.peakG !== undefined ? `peak ${detail.peakG.toFixed(1)} g` : null,
+          detail?.tiltDelta !== undefined ? `tilt ${Math.round(detail.tiltDelta)}°` : null,
+        ].filter(Boolean)
+        setLastEvent(measured.length ? `Fall detected · ${measured.join(', ')}` : 'Fall detected')
       },
+      onOk: () => setLastEvent(`"I'm OK" pressed at ${stamp()}`),
+      onTap: (tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`),
+      onSurvey: (summary: { scans?: number; accessPoints?: number }) =>
+        setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`),
+      onLocation: (place: { room?: string; floor?: string; confidence?: number }) =>
+        setLastEvent(
+          `Located in room ${place.room}${place.floor ? `, floor ${place.floor}` : ''}${
+            place.confidence ? ` · ${place.confidence}%` : ''
+          }`,
+        ),
       onDisconnect: () => setConn(undefined),
     }
 
@@ -267,7 +292,9 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      setConn(kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events))
+      if (kind === 'wifi') setConn(await connectWifi(address, events))
+      else if (kind === 'serial') setConn(await connectSerial(events))
+      else setConn(await connectSimulated(events))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -284,8 +311,8 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable over Wi-Fi to check its sensors are working and pair it to a resident. The board must be
-          on the same network as this computer.
+          Connect a wearable over Wi-Fi, or an Arduino UNO with an MPU6050 over USB, to check its accelerometer and
+          gyroscope and pair it to a resident.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="board-address">
@@ -308,6 +335,14 @@ function ConnectPanel() {
             Connect over Wi-Fi
           </button>
           <button
+            disabled={busy || !serialSupported()}
+            onClick={() => start('serial')}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
+          >
+            <Usb className="h-4 w-4" strokeWidth={1.5} />
+            Connect Arduino (USB)
+          </button>
+          <button
             disabled={busy}
             onClick={() => start('simulated')}
             className="h-10 px-2 text-sm text-fg-2 transition-colors duration-150 hover:text-fg"
@@ -315,6 +350,11 @@ function ConnectPanel() {
             Try a demo device
           </button>
         </div>
+        {!serialSupported() && (
+          <p className="mt-3 text-xs text-fg-3">
+            USB serial needs Chrome or Edge on desktop. Use Wi-Fi or the demo device otherwise.
+          </p>
+        )}
         {error && <p className="mt-3 text-sm text-fall">{error}</p>}
       </section>
     )
@@ -335,7 +375,7 @@ function ConnectPanel() {
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          {conn.transport !== 'simulated' && (
+          {conn.transport === 'wifi' && (
             <button
               onClick={() => conn.identify()}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-raised px-3 text-sm text-fg transition-colors duration-150 hover:bg-page"
@@ -433,6 +473,89 @@ function ConnectPanel() {
           {error && <p className="mt-2 text-sm text-fall">{error}</p>}
         </div>
       </div>
+
+      <div className="mt-8 border-t border-line pt-6">
+        <SurveyPanel device={dev.id} lastEvent={lastEvent} />
+      </div>
+    </section>
+  )
+}
+
+// ---------- Wearables reporting in ----------
+
+interface SeenDevice {
+  id: string
+  firmware: string | null
+  firstSeen: string
+  lastSeen: string
+  pairedTo: { residentId: string; name: string; room: string } | null
+}
+
+function seenAgo(iso: string) {
+  const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+  if (sec < 5) return 'just now'
+  if (sec < 90) return sec + ' s ago'
+  if (sec < 5400) return Math.round(sec / 60) + ' min ago'
+  return Math.round(sec / 3600) + ' h ago'
+}
+
+/**
+ * The firmware posts straight to the server, so a wearable shows up here as
+ * soon as it comes online, before anyone pairs it to a resident.
+ */
+function DevicesSeen() {
+  const [devices, setDevices] = useState<SeenDevice[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const load = async () => {
+      try {
+        const res = await fetch('/api/devices')
+        if (res.ok && !cancelled) setDevices((await res.json()) as SeenDevice[])
+      } catch {
+        // Backend offline: keep the last list and try again.
+      }
+      if (!cancelled) timer = setTimeout(load, 5000)
+    }
+    load()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [])
+
+  return (
+    <section>
+      <h2 className="mb-1 text-base font-medium">Wearables reporting in</h2>
+      <p className="mb-3 text-sm text-fg-2">
+        Devices that have sent data to the server. Pair one below to give its readings to a resident.
+      </p>
+      <div className="overflow-hidden rounded-xl border border-line bg-card">
+        {devices && devices.length > 0 ? (
+          <ul>
+            {devices.map((d) => (
+              <li
+                key={d.id}
+                className="grid min-h-14 grid-cols-[1fr_1fr] items-center gap-x-4 border-b border-line px-4 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_104px_120px_1fr]"
+              >
+                <span className="truncate font-mono">{d.id}</span>
+                <span className="hidden font-mono tabular-nums text-fg-2 md:block">{d.firmware ?? "–"}</span>
+                <span className="hidden tabular-nums text-fg-2 md:block">{seenAgo(d.lastSeen)}</span>
+                <span className="truncate text-fg-2">
+                  {d.pairedTo ? "Room " + d.pairedTo.room + " · " + d.pairedTo.name : "Not paired"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="px-4 py-5 text-sm text-fg-2">
+            {devices === null
+              ? "Looking for wearables…"
+              : "No wearables yet. Power one on, or run npm run sim:device to pretend."}
+          </p>
+        )}
+      </div>
     </section>
   )
 }
@@ -527,6 +650,7 @@ export function Settings() {
       <div className="mt-8 flex flex-col gap-8">
         <DataSource />
         <ConnectPanel />
+        <DevicesSeen />
         <DeviceTable />
       </div>
     </Page>

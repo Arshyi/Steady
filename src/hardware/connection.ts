@@ -1,16 +1,45 @@
-// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), or a built-in demo device.
+// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), an Arduino over USB
+// (serial.ts), or a built-in demo device.
 // Both give the same events, so the Settings page doesn't care which one is used.
 
-import type { MotionSample } from './protocol'
+import { WIFI_PORT, type MotionSample } from './protocol'
 
-export type Transport = 'wifi' | 'simulated'
+export type Transport = 'wifi' | 'serial' | 'simulated'
+
+/** How a survey capture ended, as reported by the board */
+export interface SurveySummary {
+  scans?: number
+  accessPoints?: number
+}
+
+/** The room the backend matched to the board's Wi-Fi fingerprint */
+export interface KnownLocation {
+  room?: string
+  floor?: string
+  confidence?: number
+}
+
+/** What the board measured when it fired a fall */
+export interface FallDetail {
+  peakG?: number
+  tiltDelta?: number
+  confidence?: number
+}
 
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
   onBattery: (percent: number) => void
   onMotion: (sample: MotionSample) => void
-  onFall: () => void
+  onFall: (detail?: FallDetail) => void
   onDisconnect: () => void
+  /** The wearer pressed the button once: "I'm OK". */
+  onOk?: () => void
+  /** A staff member tapped an NFC tag on the wearable. */
+  onTap?: (tag: string) => void
+  /** The board finished a survey capture (three presses). */
+  onSurvey?: (summary: SurveySummary) => void
+  /** The backend placed the device in a room after a scan. */
+  onLocation?: (location: KnownLocation) => void
 }
 
 export interface Connection {
@@ -20,7 +49,7 @@ export interface Connection {
 }
 
 /** Parse one text line from the device (format in protocol.ts) */
-function handleLine(line: string, ev: DeviceEvents) {
+export function handleLine(line: string, ev: DeviceEvents) {
   const parts = line.split(',')
   switch (parts[0]) {
     case 'I':
@@ -34,20 +63,42 @@ function handleLine(line: string, ev: DeviceEvents) {
       if ([ax, ay, az, gx, gy, gz].every(Number.isFinite)) ev.onMotion({ t: performance.now(), ax, ay, az, gx, gy, gz })
       break
     }
-    case 'F':
-      ev.onFall()
+    case 'F': {
+      const [peak, tilt, confidence] = parts.slice(1).map(Number)
+      ev.onFall({
+        peakG: Number.isFinite(peak) ? peak : undefined,
+        tiltDelta: Number.isFinite(tilt) ? tilt : undefined,
+        confidence: Number.isFinite(confidence) ? confidence : undefined,
+      })
+      break
+    }
+    case 'O':
+      ev.onOk?.()
+      break
+    case 'T':
+      if (parts[1]) ev.onTap?.(parts[1].trim())
+      break
+    case 'S':
+      ev.onSurvey?.({ scans: Number(parts[1]) || undefined, accessPoints: Number(parts[2]) || undefined })
+      break
+    case 'L':
+      if (parts[1]) {
+        ev.onLocation?.({
+          room: parts[1].trim(),
+          floor: parts[2]?.trim() || undefined,
+          confidence: Number(parts[3]) || undefined,
+        })
+      }
       break
   }
 }
 
 // ---------- Wi-Fi (UNO Q relay) ----------
 
-/** Port the relay on the board listens on for the Settings page */
-export const WIFI_PORT = 8765
-
 /**
  * Connects to the relay running on the board's Linux side over a WebSocket.
- * It speaks the text lines in protocol.ts: I, B, M, F in; "I?" and "I" out.
+ * It speaks the same text lines as USB serial (see protocol.ts): I, M, F, O, T, S, L in;
+ * "I?" and "I" out. The board sends its own readings and falls to the server.
  */
 export async function connectWifi(address: string, ev: DeviceEvents): Promise<Connection> {
   const host = address.trim().replace(/\/+$/, '')
@@ -109,12 +160,22 @@ export async function connectSimulated(ev: DeviceEvents): Promise<Connection> {
   // Simulated fall after 8 seconds so the fall check can pass
   const fallTimer = setTimeout(ev.onFall, 8000)
 
+  // The button, the NFC tap (standing in for a tag until readers are fitted) and a survey
+  const okTimer = setInterval(() => ev.onOk?.(), 21_000)
+  const tapTimer = setInterval(() => ev.onTap?.('04A2339C1B80'), 27_000)
+  const surveyTimer = setInterval(() => ev.onSurvey?.({ scans: 5, accessPoints: 8 }), 41_000)
+  const locationTimer = setInterval(() => ev.onLocation?.({ room: '103', floor: '1', confidence: 82 }), 13_000)
+
   return {
     transport: 'simulated',
     identify: async () => {},
     disconnect: async () => {
       clearInterval(timer)
       clearTimeout(fallTimer)
+      clearInterval(okTimer)
+      clearInterval(tapTimer)
+      clearInterval(surveyTimer)
+      clearInterval(locationTimer)
       ev.onDisconnect()
     },
   }

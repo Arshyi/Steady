@@ -2,8 +2,13 @@
 // and keeps the result in memory so the web app can poll it cheaply.
 
 import { sql, lit, SCHEMA, type Row } from './databricks.ts'
-import { loadMode, saveMode, insertAlerts, type Mode } from './schema.ts'
-import { startSimulator, stopSimulator, setFallen, backfillIfNeeded } from './simulator.ts'
+import { loadMode, saveMode, insertAlerts, setupSchema } from './schema.ts'
+import { startSimulator, stopSimulator, setFallen, backfillIfNeeded, simulateFall } from './simulator.ts'
+import { listSeen, touchDevice } from './devices.ts'
+import type { AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status } from './types.ts'
+
+export type { AlertKind, AlertView, DeviceReading, ResidentView, State, Status } from './types.ts'
+export { simulateFall }
 
 const REFRESH_MS = 4000
 const WINDOW_HOURS = 4
@@ -16,48 +21,6 @@ const OFFLINE_AFTER_SEC = 120 // no reading for 2 min -> "no data"
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
 const REALERT_AFTER_MIN = 10 // after an alert is handled, wait this long before raising the same one again
-
-export type Status = 'fall' | 'check' | 'up' | 'asleep' | 'offline'
-export type AlertKind = 'fall' | 'check' | 'battery' | 'signal'
-
-export interface ResidentView {
-  id: string
-  name: string
-  room: string
-  status: Status
-  note: string | null
-  lastMovementMin: number | null
-  heartRate: number | null
-  heartRateRange: [number, number] | null
-  device: {
-    id: string
-    firmware: string | null
-    battery: number | null
-    signal: 'good' | 'fair' | 'weak' | null
-    rssi: number | null
-    lastSyncSec: number | null
-    wornSince: string | null
-  } | null
-  movement: (number | null)[]
-}
-
-export interface AlertView {
-  id: string
-  residentId: string
-  kind: AlertKind
-  raisedAt: string
-  detail: string
-  handledAt: string | null
-}
-
-export interface State {
-  mode: Mode
-  updatedAt: string | null
-  slots: string[]
-  residents: ResidentView[]
-  alerts: AlertView[]
-  error: string | null
-}
 
 let state: State = { mode: 'simulated', updatedAt: null, slots: [], residents: [], alerts: [], error: null }
 export const getState = () => state
@@ -81,12 +44,12 @@ function makeSlots(): string[] {
 // Acknowledge/Done/Undo clicks. A Databricks read that started before a click was saved can
 // still return the old value, so each click is kept here and laid over every read until a read
 // that started after the save has run.
-const alertEdits = new Map<string, { handledAt: string | null; savedAt: number | null }>()
+const alertEdits = new Map<string, { handledAt: string | null; handledBy: string | null; savedAt: number | null }>()
 
 function applyAlertEdits(alerts: AlertView[]) {
   return alerts.map((a) => {
     const edit = alertEdits.get(a.id)
-    return edit ? { ...a, handledAt: edit.handledAt } : a
+    return edit ? { ...a, handledAt: edit.handledAt, handledBy: edit.handledBy } : a
   })
 }
 
@@ -133,7 +96,7 @@ async function refresh() {
       { source },
     ),
     sql(
-      `SELECT alert_id, resident_id, kind, raised_at, detail, handled_at FROM ${SCHEMA}.alerts
+      `SELECT alert_id, resident_id, kind, raised_at, detail, handled_at, handled_by FROM ${SCHEMA}.alerts
        WHERE source = :source AND raised_at > current_timestamp() - INTERVAL 12 HOURS
        ORDER BY raised_at DESC`,
       { source },
@@ -147,6 +110,7 @@ async function refresh() {
     raisedAt: new Date(String(a.raised_at)).toISOString(),
     detail: String(a.detail ?? ''),
     handledAt: a.handled_at ? new Date(String(a.handled_at)).toISOString() : null,
+    handledBy: str(a.handled_by),
   }))
   const alertViews = applyAlertEdits(fromDb)
   // This read started after these clicks were saved, so it already includes them
@@ -217,7 +181,8 @@ async function refresh() {
     )
   const newAlerts: string[] = []
   const raise = (rid: string, kind: AlertKind, detail: string) => {
-    if (!hasOpen(rid, kind) && !handledRecently(rid, kind)) newAlerts.push(`(${lit(rid)}, ${lit(kind)}, current_timestamp(), ${lit(detail)}, NULL, ${lit(source)})`)
+    if (!hasOpen(rid, kind) && !handledRecently(rid, kind))
+      newAlerts.push(`(${lit(rid)}, ${lit(kind)}, current_timestamp(), ${lit(detail)}, NULL, ${lit(source)}, NULL)`)
   }
   for (const v of views) {
     if (v.status === 'check') raise(v.id, 'check', v.note ?? 'Unusual movement')
@@ -267,6 +232,7 @@ export function refreshSoon() {
 }
 
 export async function start() {
+  await setupSchema()
   state.mode = await loadMode()
   if (state.mode === 'simulated') {
     if (await backfillIfNeeded()) console.log('[simulator] wrote tonight’s history')
@@ -292,13 +258,14 @@ export async function setMode(mode: Mode) {
 // clicks one at a time and retry if another write (like a new alert) got in first.
 let alertWrites: Promise<unknown> = Promise.resolve()
 
-function saveAlert(id: string, handledAt: string | null) {
+function saveAlert(id: string, handledAt: string | null, by: string | null) {
   const write = async () => {
     for (let attempt = 1; ; attempt++) {
       try {
         return await sql(
-          `UPDATE ${SCHEMA}.alerts SET handled_at = ${handledAt ? `CAST(${lit(handledAt)} AS TIMESTAMP)` : 'NULL'} WHERE alert_id = :id`,
-          { id },
+          `UPDATE ${SCHEMA}.alerts SET handled_at = ${handledAt ? `CAST(${lit(handledAt)} AS TIMESTAMP)` : 'NULL'},
+             handled_by = ${handledAt ? ':by' : 'NULL'} WHERE alert_id = :id`,
+          { id, by },
         )
       } catch (e) {
         if (attempt >= 4 || !/CONCURRENT|conflict/i.test((e as Error).message)) throw e
@@ -311,14 +278,15 @@ function saveAlert(id: string, handledAt: string | null) {
   return next
 }
 
-export async function handleAlert(id: string, handled: boolean) {
+export async function handleAlert(id: string, handled: boolean, by: string | null = null) {
   const handledAt = handled ? new Date().toISOString() : null
-  const edit = { handledAt, savedAt: null as number | null }
+  const handledBy = handled ? by : null
+  const edit = { handledAt, handledBy, savedAt: null as number | null }
   // Show the change to every screen straight away, before Databricks has saved it
   alertEdits.set(id, edit)
   state = { ...state, alerts: applyAlertEdits(state.alerts) }
   try {
-    await saveAlert(id, handledAt)
+    await saveAlert(id, handledAt, handledBy)
     edit.savedAt = Date.now()
   } catch (e) {
     if (alertEdits.get(id) === edit) alertEdits.delete(id)
@@ -330,6 +298,7 @@ export async function handleAlert(id: string, handled: boolean) {
 
 export async function pairDevice(residentId: string, deviceId: string, firmware: string | null) {
   pairingCache.clear()
+  touchDevice(deviceId, firmware)
   // A device can only be on one resident
   await sql(`DELETE FROM ${SCHEMA}.pairings WHERE device_id = :device OR resident_id = :resident`, {
     device: deviceId,
@@ -356,17 +325,6 @@ async function residentForDevice(deviceId: string): Promise<string | null> {
   return rows[0] ? String(rows[0].resident_id) : null
 }
 
-export interface DeviceReading {
-  deviceId: string
-  ts?: string
-  movement: number
-  gyroDps?: number
-  accelG?: number
-  heartRate?: number | null
-  battery?: number | null
-  rssi?: number | null
-}
-
 // Real readings arrive every second or so; write them to Databricks in small batches
 let pending: string[] = []
 let flushTimer: NodeJS.Timeout | undefined
@@ -385,6 +343,7 @@ export async function ingestReadings(readings: DeviceReading[]) {
   for (const r of readings) {
     const residentId = await cachedResident(r.deviceId)
     if (!residentId) continue // not paired yet
+    touchDevice(r.deviceId, null)
     pending.push(
       `(${lit(r.ts ?? new Date().toISOString())}, ${lit(residentId)}, ${lit(r.deviceId)}, 'device', ${lit(r.movement)}, ${lit(r.gyroDps ?? null)}, ${lit(r.accelG ?? null)}, ${lit(r.heartRate ?? null)}, ${lit(r.battery ?? null)}, ${lit(r.rssi ?? null)})`,
     )
@@ -407,13 +366,49 @@ async function flush() {
   }
 }
 
+/** Who cleared an alert, in words the dashboard shows next to it */
+function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
+  if (kind === 'ok') return "I'm OK button"
+  return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
+}
+
+/**
+ * The wearer pressed "I'm OK", or a staff member tapped an NFC tag on the device.
+ * Clears that resident's newest open alert and records who did it, so the
+ * dashboard can say "handled via I'm OK button".
+ */
+export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null> {
+  pairingCache.delete(deviceId)
+  const residentId = await cachedResident(deviceId)
+  if (!residentId) return null
+
+  const by = ackLabel(kind, tag)
+  const rows = await sql(
+    `SELECT alert_id FROM ${SCHEMA}.alerts
+     WHERE resident_id = :resident AND handled_at IS NULL
+     ORDER BY raised_at DESC LIMIT 1`,
+    { resident: residentId },
+  )
+  const alertId = rows[0] ? String(rows[0].alert_id) : null
+  if (alertId) await handleAlert(alertId, true, by)
+  return { residentId, alertId, handledBy: by }
+}
+
 /** Fast path: a device reported a fall. Raise the alert straight away. */
-export async function reportFall(deviceId: string) {
+export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {
   pairingCache.delete(deviceId)
   const residentId = await cachedResident(deviceId)
   if (!residentId) return false
-  await insertAlerts([`(${lit(residentId)}, 'fall', current_timestamp(), 'Fall detected by the device', NULL, 'device')`])
+  await insertAlerts([`(${lit(residentId)}, 'fall', current_timestamp(), ${lit(detail)}, NULL, 'device', NULL)`])
   refreshSoon()
   return true
+}
+
+/** Every device the server has heard from, with the resident it is paired to */
+export function listDevices(): DeviceInfo[] {
+  const paired = new Map<string, DeviceInfo['pairedTo']>()
+  for (const r of state.residents)
+    if (r.device) paired.set(r.device.id, { residentId: r.id, name: r.name, room: r.room })
+  return listSeen().map((d) => ({ ...d, pairedTo: paired.get(d.id) ?? null }))
 }
 

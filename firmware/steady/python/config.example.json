@@ -1,0 +1,6 @@
+{
+  "endpoint": "http://192.168.1.10:8788/api/v1/ingest",
+  "device_id": "steady-001",
+  "token": "replace-with-STEADY_DEVICE_TOKEN",
+  "spool_dir": "data/spool"
+}
