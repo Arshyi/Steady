@@ -195,7 +195,11 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && path === '/api/readings') {
       const body = await readJson(req)
       const list: DeviceReading[] = Array.isArray(body) ? body : [body]
-      for (const r of list) if (r?.deviceId) touchDevice(String(r.deviceId), null)
+      // A relay naming its firmware keeps the row honest after an OTA, instead of
+      // showing whatever version first registered.
+      for (const r of list) {
+        if (r?.deviceId) touchDevice(String(r.deviceId), r.firmware ? String(r.firmware) : null)
+      }
       const accepted = await backend.ingestReadings(list.filter((r) => r && r.deviceId && Number.isFinite(r.movement)))
       return send(res, 200, { accepted })
     }

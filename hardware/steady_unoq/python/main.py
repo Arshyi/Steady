@@ -236,6 +236,7 @@ def _summarize(now: float) -> None:
         "/api/readings",
         {
             "deviceId": CONFIG["device_id"],
+            "firmware": CONFIG["firmware"],
             "movement": min(100.0, gyro_dps / 2),
             "gyroDps": round(gyro_dps, 2),
             "accelG": round(accel_g, 3),
