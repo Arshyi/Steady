@@ -13,3 +13,7 @@ web/.wrangler/
 web/.wrangler-dev.log
 __pycache__/
 *.pyc
+
+# firmware/steady host-test build output
+*.obj
+firmware/steady/build/
