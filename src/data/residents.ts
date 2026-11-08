@@ -18,8 +18,6 @@ export interface Resident {
   id: string
   name: string
   room: string
-  /** Added by staff for a real wearable. Only these show in live mode; the demo residents only in simulated. */
-  manual?: boolean
   status: ResidentStatus
   lastMovementMin: number | null
   heartRate: number | null

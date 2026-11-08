@@ -1,11 +1,7 @@
-import { useEffect, useState } from 'react'
 import { Link, NavLink, useParams } from 'react-router'
 import { ChevronLeft } from 'lucide-react'
 import { byRoom, minutesAgo, secondsAgo, clock, LOW_BATTERY, type Resident } from '../data/residents'
 import { kindLabel } from '../data/alerts'
-import { LiveTrace } from '../components/LiveTrace'
-import type { MotionSample } from '../hardware/protocol'
-import { apiFetch } from '../auth'
 import { BatteryText, Dot, RoomPlate, StatusMark } from '../components/board'
 import { MovementChart } from '../components/MovementChart'
 import { useLive } from '../live'
@@ -46,64 +42,6 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub: 
       <p className={`mt-2 text-[28px] leading-none font-medium tabular-nums ${color}`}>{value}</p>
       <p className="mt-2 font-mono text-xs tabular-nums text-fg-3">{sub}</p>
     </div>
-  )
-}
-
-/** The wearable's gyroscope over the last few seconds, refreshed every second */
-function LiveGyroscope({ deviceId }: { deviceId: string }) {
-  const [samples, setSamples] = useState<MotionSample[]>([])
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout>
-    const load = async () => {
-      try {
-        const res = await apiFetch(`/api/live/${encodeURIComponent(deviceId)}`)
-        if (res.ok && !cancelled) {
-          setSamples((await res.json()) as MotionSample[])
-          setFailed(false)
-        }
-      } catch {
-        if (!cancelled) setFailed(true)
-      }
-      if (!cancelled) timer = setTimeout(load, 1000)
-    }
-    load()
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [deviceId])
-
-  // Draw the last 5 seconds; samples arrive about a second behind
-  const newest = samples.length ? samples[samples.length - 1].t : 0
-  const shown = samples.filter((s) => s.t >= newest - 5_000)
-  const live = newest > 0 && Date.now() - newest < 5000
-  const last = shown[shown.length - 1]
-
-  return (
-    <section className="mt-3 rounded-xl border border-line bg-card p-5">
-      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="flex items-center gap-2 text-base font-medium">
-          <span className={`h-2 w-2 rounded-full ${live ? 'bg-emerald-500' : 'bg-fg-3/40'}`} aria-hidden />
-          Gyroscope, live
-        </h2>
-        <p className="text-xs text-fg-3">
-          {live
-            ? `From ${deviceId}`
-            : failed
-              ? 'Can’t reach the server'
-              : `Waiting for ${deviceId}. Is it switched on and sending?`}
-        </p>
-      </div>
-      <LiveTrace samples={live ? shown : []} />
-      {live && last && (
-        <p className="mt-3 font-mono text-xs tabular-nums text-fg-2">
-          gyro {Math.hypot(last.gx, last.gy, last.gz).toFixed(0)} °/s · accel {Math.hypot(last.ax, last.ay, last.az).toFixed(2)} g
-        </p>
-      )}
-    </section>
   )
 }
 
@@ -154,8 +92,6 @@ function ResidentDetail({ r }: { r: Resident }) {
         />
       </div>
 
-      {r.manual && d && <LiveGyroscope deviceId={d.id} />}
-
       <div className="mt-3 grid gap-3 lg:grid-cols-[2fr_1fr]">
         <section className="flex flex-col rounded-xl border border-line bg-card p-5">
           <div className="mb-6 flex items-baseline justify-between gap-4">
@@ -170,6 +106,8 @@ function ResidentDetail({ r }: { r: Resident }) {
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-fg-2">Device</dt>
             <dd className="text-right font-mono tabular-nums">{d?.id ?? '–'}</dd>
+            <dt className="text-fg-2">Firmware</dt>
+            <dd className="text-right font-mono tabular-nums">{d?.firmware ?? '–'}</dd>
             <dt className="text-fg-2">Battery</dt>
             <dd className="text-right">
               <BatteryText value={d?.battery} />

@@ -8,8 +8,6 @@ export interface ResidentView {
   id: string
   name: string
   room: string
-  /** Added by staff for a real wearable (live mode). False for the built-in demo residents. */
-  manual: boolean
   status: Status
   note: string | null
   lastMovementMin: number | null
@@ -101,5 +99,4 @@ export interface Backend {
   listDevices(): DeviceInfo[]
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>
-  addResident(name: string, room: string | null): Promise<{ id: string; name: string; room: string }>
 }

@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Wifi, Check, Circle, Lightbulb, Usb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
+import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
-import { byRoom } from '../data/residents'
+import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
 import { connectWifi, connectSimulated, type Connection, type FallDetail, type Transport } from '../hardware/connection'
 import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
 import { apiFetch, useAuth } from '../auth'
 
+const LATEST_FIRMWARE = '1.4.2'
 const TRACE_MS = 5000
 const SEND_EVERY_MS = 1000
 
@@ -189,24 +191,17 @@ function summarize(samples: MotionSample[]) {
   const accel = samples.map((s) => Math.hypot(s.ax, s.ay, s.az))
   const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
   const gyroDps = mean(gyro)
-  // The raw second too, for the live graph on the resident's page
-  const raw = samples.map((s) => [Math.round(s.t), s.ax, s.ay, s.az, s.gx, s.gy, s.gz])
-  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel), samples: raw }
+  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel) }
 }
 
 function ConnectPanel() {
-  const { mode, residents, allResidents, pair, addResident } = useLive()
+  const { mode, residents, allResidents, pair } = useLive()
   const [conn, setConn] = useState<Connection>()
   const [dev, setDev] = useState<LiveDevice>(emptyDevice)
   const [trace, setTrace] = useState<MotionSample[]>([])
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [residentId, setResidentId] = useState('')
-  // Typing in a new resident instead of choosing one
-  const [newName, setNewName] = useState('')
-  const [newRoom, setNewRoom] = useState('')
-  // Shown straight after pairing, before the next refresh confirms it
-  const [justPaired, setJustPaired] = useState<{ device: string; name: string; room: string }>()
   const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
   const [address, setAddress] = useState(savedAddress)
   // "I'm OK", a survey or a room match, as the board reported it
@@ -373,6 +368,12 @@ function ConnectPanel() {
           {transportLabel[conn.transport]}
         </span>
         <span className="font-mono text-sm tabular-nums text-fg">{dev.id ?? 'Reading device…'}</span>
+        {dev.firmware && (
+          <span className="font-mono text-xs tabular-nums text-fg-3">
+            firmware {dev.firmware}
+            {dev.firmware !== LATEST_FIRMWARE && ` · ${LATEST_FIRMWARE} available`}
+          </span>
+        )}
         <div className="ml-auto flex gap-2">
           {conn.transport === 'wifi' && (
             <button
@@ -432,77 +433,30 @@ function ConnectPanel() {
           </ul>
 
           <h3 className="mt-6 text-sm font-medium">Pair to a resident</h3>
-          {(() => {
-            // The pairing just made wins over data that hasn't refreshed yet
-            const shown = justPaired?.device === dev.id ? justPaired : pairedTo
-            return (
-              shown && (
-                <p className="mt-1 text-xs text-fg-2">
-                  Paired to {shown.name}
-                  {shown.room && `, room ${shown.room}`}
-                </p>
-              )
-            )
-          })()}
-          <div className="mt-3 flex flex-wrap gap-2">
+          {pairedTo && (
+            <p className="mt-1 text-xs text-fg-2">
+              Paired to {pairedTo.name}, room {pairedTo.room}
+            </p>
+          )}
+          <div className="mt-3 flex gap-2">
             <select
               value={residentId}
               onChange={(e) => setResidentId(e.target.value)}
-              className="h-10 min-w-0 flex-1 basis-56 rounded-lg border border-line bg-raised px-3 text-sm text-fg"
+              className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 text-sm text-fg"
             >
               <option value="">Choose a resident</option>
-              <option value="__new">+ Add a new resident</option>
               {[...allResidents].sort(byRoom).map((r) => (
                 <option key={r.id} value={r.id}>
-                  {r.room ? `${r.room} · ${r.name}` : r.name}
+                  {r.room} · {r.name}
                 </option>
               ))}
             </select>
-            {residentId === '__new' && (
-              <>
-                <label className="sr-only" htmlFor="new-resident-name">
-                  Resident’s name
-                </label>
-                <input
-                  id="new-resident-name"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Resident’s name"
-                  autoComplete="off"
-                  className="h-10 min-w-0 flex-1 basis-48 rounded-lg border border-line bg-raised px-3 text-sm text-fg placeholder:text-fg-3"
-                />
-                <label className="sr-only" htmlFor="new-resident-room">
-                  Room (optional)
-                </label>
-                <input
-                  id="new-resident-room"
-                  value={newRoom}
-                  onChange={(e) => setNewRoom(e.target.value)}
-                  placeholder="Room (optional)"
-                  autoComplete="off"
-                  className="h-10 w-36 rounded-lg border border-line bg-raised px-3 text-sm text-fg placeholder:text-fg-3"
-                />
-              </>
-            )}
             <button
-              disabled={!dev.id || !residentId || (residentId === '__new' && !newName.trim())}
+              disabled={!residentId || !dev.id}
               onClick={async () => {
                 if (!dev.id) return
-                setError(undefined)
                 try {
-                  let id = residentId
-                  let who = allResidents.find((r) => r.id === id)
-                  if (id === '__new') {
-                    const name = newName.trim()
-                    const room = newRoom.trim()
-                    id = await addResident(name, room)
-                    who = { name, room } as (typeof allResidents)[number]
-                    setNewName('')
-                    setNewRoom('')
-                  }
-                  await pair(id, dev.id, dev.firmware)
-                  setResidentId('')
-                  if (who) setJustPaired({ device: dev.id, name: who.name, room: who.room })
+                  await pair(residentId, dev.id, dev.firmware)
                   setSent({ ok: sent.ok })
                 } catch (e) {
                   setError((e as Error).message)
@@ -510,7 +464,7 @@ function ConnectPanel() {
               }}
               className="h-10 rounded-lg bg-fg px-4 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] disabled:opacity-40"
             >
-              {residentId === '__new' ? 'Add and pair' : 'Pair'}
+              Pair
             </button>
           </div>
           {mode === 'simulated' && (
@@ -537,10 +491,6 @@ interface SeenDevice {
   pairedTo: { residentId: string; name: string; room: string } | null
 }
 
-/** A wearable that sent data in the last 15 seconds counts as connected */
-const CONNECTED_WITHIN_S = 15
-const secondsSince = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
-
 function seenAgo(iso: string) {
   const sec = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
   if (sec < 5) return 'just now'
@@ -549,23 +499,11 @@ function seenAgo(iso: string) {
   return Math.round(sec / 3600) + ' h ago'
 }
 
-/** Green while a wearable is sending, grey once it goes quiet */
-function StatusLight({ on }: { on: boolean }) {
-  return (
-    <span className="relative flex h-2.5 w-2.5 shrink-0" role="img" aria-label={on ? 'Connected' : 'Not connected'}>
-      {on && <span className="absolute inset-0 animate-ping rounded-full bg-emerald-500 opacity-40 motion-reduce:hidden" />}
-      <span className={`relative h-2.5 w-2.5 rounded-full ${on ? 'bg-emerald-500' : 'bg-fg-3/40'}`} />
-    </span>
-  )
-}
-
 /**
- * The wearable posts straight to the server, so a wearable shows up here as
+ * The firmware posts straight to the server, so a wearable shows up here as
  * soon as it comes online, before anyone pairs it to a resident.
  */
 function DevicesSeen() {
-  const { allResidents } = useLive()
-  const added = new Set(allResidents.map((r) => r.id))
   const [devices, setDevices] = useState<SeenDevice[] | null>(null)
 
   useEffect(() => {
@@ -591,8 +529,7 @@ function DevicesSeen() {
     <section>
       <h2 className="mb-1 text-base font-medium">Wearables reporting in</h2>
       <p className="mb-3 text-sm text-fg-2">
-        Devices that have sent data to the server. A green light means it’s sending right now. Pair one below to give
-        its readings to a resident.
+        Devices that have sent data to the server. Pair one below to give its readings to a resident.
       </p>
       <div className="overflow-hidden rounded-xl border border-line bg-card">
         {devices && devices.length > 0 ? (
@@ -600,19 +537,13 @@ function DevicesSeen() {
             {devices.map((d) => (
               <li
                 key={d.id}
-                className="grid min-h-14 grid-cols-[1fr_1fr] items-center gap-x-4 border-b border-line px-4 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_160px_1fr]"
+                className="grid min-h-14 grid-cols-[1fr_1fr] items-center gap-x-4 border-b border-line px-4 py-2 text-sm last:border-b-0 md:grid-cols-[1fr_104px_120px_1fr]"
               >
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <StatusLight on={secondsSince(d.lastSeen) <= CONNECTED_WITHIN_S} />
-                  <span className="truncate font-mono">{d.id}</span>
-                </span>
-                <span className="hidden tabular-nums text-fg-2 md:block">
-                  {secondsSince(d.lastSeen) <= CONNECTED_WITHIN_S ? 'Connected' : `Last seen ${seenAgo(d.lastSeen)}`}
-                </span>
+                <span className="truncate font-mono">{d.id}</span>
+                <span className="hidden font-mono tabular-nums text-fg-2 md:block">{d.firmware ?? "–"}</span>
+                <span className="hidden tabular-nums text-fg-2 md:block">{seenAgo(d.lastSeen)}</span>
                 <span className="truncate text-fg-2">
-                  {d.pairedTo && added.has(d.pairedTo.residentId)
-                    ? (d.pairedTo.room ? `Room ${d.pairedTo.room} · ` : '') + d.pairedTo.name
-                    : 'Not paired'}
+                  {d.pairedTo ? "Room " + d.pairedTo.room + " · " + d.pairedTo.name : "Not paired"}
                 </span>
               </li>
             ))}
@@ -631,6 +562,87 @@ function DevicesSeen() {
 
 // ---------- Device table ----------
 
+function deviceIssues(r: Resident) {
+  const d = r.device
+  if (!d) return ['No device paired']
+  const issues: string[] = []
+  if (d.lastSyncSec === null) issues.push('No readings yet')
+  else if (d.lastSyncSec > 120) issues.push('Not syncing')
+  else if (d.lastSyncSec > 30) issues.push('Slow to sync')
+  if (d.battery !== null && d.battery < LOW_BATTERY) issues.push('Low battery')
+  if (d.signal === 'weak') issues.push('Weak signal')
+  if (d.firmware && d.firmware !== LATEST_FIRMWARE) issues.push('Firmware out of date')
+  return issues
+}
+
+function DeviceTable() {
+  const { residents } = useLive()
+  const cols = 'grid grid-cols-[64px_1fr] md:grid-cols-[72px_1fr_104px_88px_72px_88px_104px_1fr] items-center gap-x-4'
+
+  return (
+    <section>
+      <h2 className="mb-3 text-base font-medium">Devices in {shift.wing}</h2>
+      <div className="overflow-hidden rounded-xl border border-line bg-card">
+        <div className={`${cols} h-10 border-b border-line px-4 text-xs text-fg-3`}>
+          <span>Room</span>
+          <span>Resident</span>
+          <span className="hidden md:block">Device</span>
+          <span className="hidden md:block">Firmware</span>
+          <span className="hidden text-right md:block">Battery</span>
+          <span className="hidden md:block">Signal</span>
+          <span className="hidden md:block">Last sync</span>
+          <span className="hidden md:block">Status</span>
+        </div>
+        <ul>
+          {[...residents].sort(byRoom).map((r) => {
+            const issues = deviceIssues(r)
+            const d = r.device
+            return (
+              <li key={r.id} className={`${cols} min-h-14 border-b border-line px-4 py-2 text-sm last:border-b-0`}>
+                <RoomPlate room={r.room} />
+                <div className="min-w-0">
+                  <p className="truncate">{r.name}</p>
+                  <p className={`truncate text-xs md:hidden ${issues.length ? 'text-check' : 'text-fg-2'}`}>
+                    {issues.length ? issues.join(', ') : 'Device OK'}
+                  </p>
+                </div>
+                <span className="hidden font-mono tabular-nums text-fg-2 md:block">{d?.id ?? '–'}</span>
+                <span
+                  className={`hidden font-mono tabular-nums md:block ${
+                    d?.firmware && d.firmware !== LATEST_FIRMWARE ? 'text-check' : 'text-fg-2'
+                  }`}
+                >
+                  {d?.firmware ?? '–'}
+                </span>
+                <span className="hidden text-right text-fg-2 md:block">
+                  <BatteryText value={d?.battery} />
+                </span>
+                <span className={`hidden md:block ${d?.signal === 'weak' ? 'text-check' : 'text-fg-2'}`}>
+                  {d?.rssi !== null && d?.rssi !== undefined ? (
+                    <>
+                      <span className="font-mono tabular-nums">{d.rssi}</span> dBm
+                    </>
+                  ) : (
+                    '–'
+                  )}
+                </span>
+                <span className="hidden font-mono tabular-nums text-fg-2 md:block">{secondsAgo(d?.lastSyncSec ?? null)}</span>
+                <span className="hidden items-center gap-2 md:inline-flex">
+                  <Dot kind={issues.length ? 'check' : 'up'} />
+                  <span className={issues.length ? 'text-check' : 'text-fg-2'}>{issues.length ? issues.join(', ') : 'OK'}</span>
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+        {residents.length === 0 && (
+          <p className="px-4 py-4 text-sm text-fg-2">No wearables are paired yet. Connect one above and pair it to a resident.</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export function Settings() {
   // Caretakers can connect and pair devices; the data source and demo fall are for admins
   const { isAdmin } = useAuth()
@@ -648,6 +660,7 @@ export function Settings() {
         {isAdmin && <DataSource />}
         <ConnectPanel />
         <DevicesSeen />
+        <DeviceTable />
       </div>
     </Page>
   )

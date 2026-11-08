@@ -8,7 +8,7 @@ import { useLive } from '../live'
 export function RoomPlate({ room }: { room: string }) {
   return (
     <span className="inline-flex h-6 min-w-12 items-center justify-center rounded border border-line bg-raised px-2 font-mono text-xs tabular-nums text-fg">
-      {room || '–'}
+      {room}
     </span>
   )
 }

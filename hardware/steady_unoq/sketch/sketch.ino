@@ -7,7 +7,7 @@
 // and README.md.
 //
 // Controls on the wearable:
-//   * one press of the button      → "I'm OK", resolves an open fall on the dashboard
+//   * one press of the button      → "I'm OK", acknowledged on the dashboard
 //   * three presses within ~1.5 s  → SURVEY MODE: the Linux side scans Wi-Fi and
 //                                    uploads a fingerprint for the room
 // The button is the only input, so the gesture is decided after a short pause
@@ -23,7 +23,6 @@
 
 #include "Arduino_RouterBridge.h"
 #include <Wire.h>
-#include "fall_detector.h"
 
 // ---- identity -------------------------------------------------------------
 // Give every device its own ID before flashing; the dashboard pairs on it.
@@ -33,9 +32,6 @@ static const char* FIRMWARE = "1.2.1";
 // ---- sampling -------------------------------------------------------------
 static constexpr uint32_t SAMPLE_HZ = 50;
 static constexpr uint32_t SAMPLE_MS = 1000 / SAMPLE_HZ;
-// Falls are checked far more often than samples are sent: a landing spike lasts
-// only a few tens of milliseconds, so 50 Hz can miss it.
-static constexpr uint32_t DETECT_MS = 5;
 
 // ---- MPU6050 (I2C) --------------------------------------------------------
 // Which I2C bus the MPU6050 is on. On the UNO Q the pins labelled SDA/SCL are
@@ -57,13 +53,17 @@ static constexpr uint8_t IMU_REG_ACCEL_XOUT_H = 0x3B;
 static constexpr uint8_t IMU_REG_PWR_MGMT_1 = 0x6B;
 static constexpr uint8_t IMU_REG_WHO_AM_I = 0x75;
 static constexpr uint8_t IMU_ADDRESSES[] = {0x68, 0x69};
-// ±8 g: at ±2 g every axis tops out at 2 g, below the 2.6 g / 3.5 g impact
-// thresholds, so most landings could never register as a fall.
-static constexpr float ACCEL_LSB_PER_G = 4096.0f;    // ±8 g
+static constexpr float ACCEL_LSB_PER_G = 16384.0f;   // ±2 g
 static constexpr float GYRO_LSB_PER_DPS = 65.5f;     // ±500 °/s
 
-// ---- fall detection: see fall_detector.h (the USB sketch's rules, tested with drops)
-FallDetector fallDetector;
+// ---- fall detection (untuned: test with real drops before relying on it) ---
+// A fall starts with the body becoming weightless, then a hard landing.
+static constexpr float FREEFALL_G = 0.55f;      // |a| below this is "free fall"
+static constexpr uint32_t FREEFALL_MIN_MS = 100; // must last at least this long
+static constexpr uint32_t FREEFALL_MAX_MS = 900; // longer means thrown, not falling
+static constexpr float IMPACT_G = 2.6f;          // landing after a free fall
+static constexpr float IMPACT_ALONE_G = 3.5f;    // hard hit with no free fall seen
+static constexpr uint32_t REFRACTORY_MS = 3000;  // one alert per 3 s
 
 // ---- button gestures ------------------------------------------------------
 // The button sits across D2 and D4. D4 is driven low and D2 held high through its
@@ -86,7 +86,11 @@ uint8_t imuAddress = IMU_ADDRESSES[0];
 uint32_t nextImuRetry = 0;
 
 uint32_t lastSampleMs = 0;
-uint32_t lastDetectMs = 0;
+uint32_t lastFallMs = 0;
+
+bool weightless = false;
+uint32_t weightlessSince = 0;
+uint32_t weightlessMs = 0;
 
 // Button gesture state machine. `gestureOpen` stays true while presses are still
 // arriving; `GESTURE_GAP_MS` after the last one the gesture is decided.
@@ -164,10 +168,10 @@ bool startImu() {
       delay(100);
       if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x01)) continue;
 
-      imuWrite(IMU_REG_SMPLRT_DIV, 4);      // 1 kHz base rate / 5 = 200 Hz, for fall detection
+      imuWrite(IMU_REG_SMPLRT_DIV, 19);     // 1 kHz base rate / 20 = 50 Hz
       imuWrite(IMU_REG_CONFIG, 0x03);       // DLPF, ~44 Hz accelerometer bandwidth
       imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // +/-500 deg/s
-      imuWrite(IMU_REG_ACCEL_CONFIG, 0x10); // +/-8 g (AFS_SEL=2), matches ACCEL_LSB_PER_G
+      imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // +/-2 g
 
       Monitor.print("[steady] MPU6050 online at 0x");
       Monitor.print(imuAddress, HEX);
@@ -273,18 +277,30 @@ void updateButton(uint32_t now) {
 }
 
 void detectFall(uint32_t now, float ax, float ay, float az) {
-  const FallEvent fall = fallDetector.update(now, ax, ay, az);
-  if (fallDetector.lastStep == 1) Monitor.println("[steady] weightless");
-  if (fallDetector.lastStep == 2) Monitor.println("[steady] impact");
-  if (!fall.fired) return;
+  const float g = sqrtf(ax * ax + ay * ay + az * az);
 
-  // "<ms>,<peak g>,<weightless ms>,<posture change degrees>"
-  char event[56];
-  snprintf(event, sizeof event, "%lu,%.2f,%lu,%.0f", (unsigned long)now, fall.peakG, (unsigned long)fall.airMs, fall.tiltDeg);
-  Monitor.print("[steady] FALL ");
-  Monitor.println(event);
-  Bridge.call("steady_fall", String(event));
-  steadyIdentify();  // local feedback even if the network is down
+  if (g < FREEFALL_G) {
+    if (!weightless) {
+      weightless = true;
+      weightlessSince = now;
+    }
+    weightlessMs = now - weightlessSince;
+    if (weightlessMs > FREEFALL_MAX_MS) weightless = false;  // a throw, not a fall
+    return;
+  }
+
+  const bool landed = weightless && weightlessMs >= FREEFALL_MIN_MS && g >= IMPACT_G;
+  const bool hardHit = g >= IMPACT_ALONE_G;  // knees first, then the torso
+
+  if ((landed || hardHit) && now - lastFallMs >= REFRACTORY_MS) {
+    lastFallMs = now;
+    weightless = false;
+
+    char event[48];
+    snprintf(event, sizeof event, "%lu,%.2f,%lu", (unsigned long)now, g, (unsigned long)weightlessMs);
+    Bridge.call("steady_fall", String(event));
+    steadyIdentify();  // local feedback even if the network is down
+  }
 }
 
 // ---- Arduino entry points -------------------------------------------------
@@ -323,16 +339,12 @@ void loop() {
     imuPresent = startImu();
   }
 
-  // Read the sensor every 5 ms for fall detection; send every 4th reading (50 Hz)
-  if (imuPresent && now - lastDetectMs >= DETECT_MS) {
-    lastDetectMs = now;
+  if (imuPresent && now - lastSampleMs >= SAMPLE_MS) {
+    lastSampleMs = now;
     float ax, ay, az, gx, gy, gz;
     if (readImu(ax, ay, az, gx, gy, gz)) {
       detectFall(now, ax, ay, az);
-      if (now - lastSampleMs >= SAMPLE_MS) {
-        lastSampleMs = now;
-        publishSample(now, ax, ay, az, gx, gy, gz);
-      }
+      publishSample(now, ax, ay, az, gx, gy, gz);
     }
   }
 

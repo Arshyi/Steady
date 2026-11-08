@@ -58,8 +58,7 @@ export async function setupSchema() {
  */
 export async function insertAlerts(rows: string[]) {
   if (!rows.length) return
-  // Name the columns: the table has grown (acknowledged_at/by), and the rest default to NULL
-  await sql(`INSERT INTO ${SCHEMA}.alerts (alert_id, resident_id, kind, raised_at, detail, handled_at, source, handled_by)
+  await sql(`INSERT INTO ${SCHEMA}.alerts
     SELECT uuid(), resident_id, kind, CAST(raised_at AS TIMESTAMP), detail, CAST(handled_at AS TIMESTAMP), source, handled_by
     FROM VALUES ${rows.join(', ')} AS t(resident_id, kind, raised_at, detail, handled_at, source, handled_by)`)
 }

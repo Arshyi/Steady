@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { listSeen, touchDevice } from './devices.ts'
-import { residentSeeds, type ResidentSeed } from './residents.ts'
+import { residentSeeds } from './residents.ts'
 import type {
   AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status, Urgency,
 } from './types.ts'
@@ -78,9 +78,6 @@ const profiles: Record<string, Profile> = {
 
 let mode: Mode = 'simulated'
 let pairings = new Map<string, { deviceId: string; firmware: string | null }>()
-// Residents added from Settings to pair real wearables to. They have no simulated device.
-let addedResidents: ResidentSeed[] = []
-const allResidents = () => [...residentSeeds, ...addedResidents]
 let readings: Reading[] = []
 let alerts: LocalAlert[] = []
 let fallen = new Set<string>()
@@ -283,14 +280,12 @@ function refresh() {
   const open = visible.filter((a) => !a.handledAt)
   const openFalls = new Set(open.filter((a) => a.kind === 'fall').map((a) => a.residentId))
 
-  const views: ResidentView[] = allResidents().map((row) => {
+  const views: ResidentView[] = residentSeeds.map((row) => {
     const list = byResident.get(row.id) ?? []
     const latest = list.reduce<Reading | null>((best, r) => (!best || r.ts > best.ts ? r : best), null)
     const pairing = mode === 'device' ? pairings.get(row.id) : undefined
     const demoFill = DEMO_FILL && mode === 'device'
-    const added = !row.simDevice
-    const deviceId =
-      mode === 'simulated' ? row.simDevice || null : pairing?.deviceId ?? (demoFill && !added ? virtualDevice(row) : null)
+    const deviceId = mode === 'simulated' ? row.simDevice : pairing?.deviceId ?? (demoFill ? virtualDevice(row) : null)
 
     const lastSyncSec = latest ? Math.max(0, Math.round((Date.now() - new Date(latest.ts).getTime()) / 1000)) : null
     const moved = list.filter((r) => r.movement >= MOVING).map((r) => r.ts).sort()
@@ -321,7 +316,6 @@ function refresh() {
       id: row.id,
       name: row.name,
       room: row.room,
-      manual: !row.simDevice,
       status,
       note,
       lastMovementMin: sinceMoved === null ? null : Math.floor(sinceMoved),
@@ -453,7 +447,6 @@ interface LocalAlert {
 interface Stored {
   mode: Mode
   pairings: Record<string, { deviceId: string; firmware: string | null }>
-  residents?: { id: string; name: string; room: string }[]
 }
 
 async function load() {
@@ -463,7 +456,6 @@ async function load() {
     for (const [residentId, pairing] of Object.entries(raw.pairings ?? {})) {
       if (pairing?.deviceId) pairings.set(residentId, { deviceId: pairing.deviceId, firmware: pairing.firmware ?? null })
     }
-    addedResidents = (raw.residents ?? []).map((r) => ({ ...r, simDevice: '', simFirmware: '' }))
   } catch {
     // First run: start on simulated data with no pairings.
   }
@@ -472,11 +464,7 @@ async function load() {
 async function save() {
   try {
     await mkdir(DATA_DIR, { recursive: true })
-    const stored: Stored = {
-      mode,
-      pairings: Object.fromEntries(pairings),
-      residents: addedResidents.map(({ id, name, room }) => ({ id, name, room })),
-    }
+    const stored: Stored = { mode, pairings: Object.fromEntries(pairings) }
     await writeFile(DATA_FILE, JSON.stringify(stored, null, 2))
   } catch (e) {
     console.error('[local] cannot save:', (e as Error).message)
@@ -523,7 +511,7 @@ export async function handleAlert(id: string, handled: boolean, by: string | nul
 }
 
 export async function pairDevice(residentId: string, deviceId: string, firmware: string | null) {
-  if (!allResidents().some((r) => r.id === residentId)) throw new Error('Unknown resident')
+  if (!residentSeeds.some((r) => r.id === residentId)) throw new Error('Unknown resident')
   for (const [id, pairing] of pairings) if (pairing.deviceId === deviceId && id !== residentId) pairings.delete(id)
   pairings.set(residentId, { deviceId, firmware })
   touchDevice(deviceId, firmware)
@@ -588,19 +576,10 @@ export async function reportFall(deviceId: string, detail = 'Fall detected by th
 export function listDevices(): DeviceInfo[] {
   const paired = new Map<string, DeviceInfo['pairedTo']>()
   for (const [residentId, pairing] of pairings) {
-    const row = allResidents().find((r) => r.id === residentId)
+    const row = residentSeeds.find((r) => r.id === residentId)
     if (row) paired.set(pairing.deviceId, { residentId, name: row.name, room: row.room })
   }
   return listSeen().map((d) => ({ ...d, pairedTo: paired.get(d.id) ?? null }))
-}
-
-/** A resident added from Settings, to pair a real wearable to */
-export async function addResident(name: string, room: string | null) {
-  const row = { id: `r-${randomUUID().slice(0, 8)}`, name, room: room ?? '', simDevice: '', simFirmware: '' }
-  addedResidents.push(row)
-  await save()
-  refreshSoon()
-  return { id: row.id, name: row.name, room: row.room }
 }
 
 /** Make a resident fall right now (for demos) */
