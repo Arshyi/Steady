@@ -1,86 +1,54 @@
 # Steady hardware
 
-Two wearable firmwares live here. They send the same six channels in the same
-units, so the dashboard code is shared; they differ in how the data leaves the
-device.
+The current board is an **Arduino UNO Q with 4 GB RAM and 32 GB eMMC**. Start
+with the [UNO Q setup and storage guide](../docs/UNO_Q_SETUP.md).
 
-| | `steady_wearable/` | `steady_unoq/` |
+| Implementation | What it connects to | Status and scope |
 | --- | --- | --- |
-| Board | Nano 33 BLE / BLE Sense / 33 IoT / RP2040 Connect | **Arduino UNO Q** |
-| IMU | the board's own (BMI270, LSM9DS1, LSM6DS3, LSM6DSOX) | external **MPU6050** over I2C |
-| Link to the app | BLE notify, or USB serial text lines | **Wi-Fi/LAN**: sketch → Bridge → Python → WebSocket |
-| Browser side | `connectBluetooth`, `connectUsb` | `connectWifi` |
-| Best for | a tablet next to one resident | a device that stays on the care network |
+| [`steady_unoq/`](steady_unoq/README.md) | Root React dashboard (`src/`), Node/Databricks backend (`server/`), and survey routes in `web/` | Current integrated path: external MPU6050, 50 Hz MCU samples, Bridge, Linux WebSocket relay on port 8765, one-second backend summaries |
+| [`../firmware/steady/`](../firmware/steady/README.md) | The separate Worker/D1 application in [`../web/`](../web/README.md) | Alternative detector: 200 Hz sampling, orientation/fall state machine, waveform uploads and JSONL outage spool; different Bridge/API contract |
+| `steady_wearable/` | Legacy Nano BLE/USB protocol | Original Nano firmware, retained for reference. It is not the UNO Q app, and the current dashboard has no Bluetooth or USB connection controls. |
 
-Both speak the contract in `src/hardware/protocol.ts`.
+Do not combine the two UNO Q sketches or Python halves: their Bridge methods and
+backend payloads differ. The integrated app does not yet persist a local SQLite
+database. The alternative app's JSONL spool is not that database either.
 
-## The UNO Q app
+## Current setup
 
-`steady_unoq/` is an Arduino App Lab app, not a single sketch: the STM32 half
-reads the MPU6050 and detects falls, the Debian half serves them over WebSocket
-and relays them to the backends in `server/` (readings, falls, acks) and `web/`
-(Wi-Fi fingerprints, location, responder log).
-See `steady_unoq/README.md` for wiring, the Bridge/WebSocket message tables and
-the tuning workflow. Short version:
+Use Arduino App Lab to run `steady_unoq/`. The MCU runs Arduino on **Zephyr**;
+Debian Linux runs the relay, networking and any future local database. Use
+USB-C power rated **5 V / 3 A** and Wi-Fi for the current dashboard connection.
+USB to a sufficiently powered laptop port is useful for programming and debug.
+
+The UNO Q needs an external IMU. The integrated sketch uses `Wire`: connect the
+MPU6050 to the dedicated **SDA/D20 and SCL/D21** pins, plus **3V3 and GND**.
+A4/A5 are a different bus (`Wire2` on recent cores); Qwiic uses `Wire1`.
+See the setup guide before wiring either alternative.
+
+Set a unique device ID in the integrated sketch; the relay reads its identity
+through Bridge before advertising it or posting data. Set the relay's backend URLs
+to addresses reachable from the board. `127.0.0.1` on the board means the board,
+not your laptop. In the root dashboard, use **Settings → Connect over Wi-Fi**
+with the board's address, then pair the device to a resident. Keep the browser
+connection for diagnostics; the Linux relay sends readings and events to the
+backend independently.
+
+## Exercise the protocol without a board
+
+From the repository root:
 
 ```bash
-python hardware/steady_unoq/tools/simulator.py --port 8765   # no board needed
+python hardware/steady_unoq/tools/simulator.py --port 8765
 ```
 
-then in the dashboard: **Settings → `127.0.0.1` → Connect over Wi-Fi** (port 8765 is assumed).
+Connect Settings to `127.0.0.1`. This exercises WebSocket messages and UI states;
+it does not emulate the UNO Q, validate the sensor wiring, or measure real fall
+detection performance. The separate `npm run relay:mock` tool also posts to the
+Node backend; see the [server guide](../server/README.md).
 
-## The BLE / USB wearable
+An HTTPS dashboard needs a secure WebSocket endpoint (`wss://`) or an appropriate
+same-origin proxy; the board's plain `ws://` development server is not a deployed
+TLS endpoint. Fall detection remains a prototype requiring controlled bench and
+activity testing before operational use.
 
-`steady_wearable/steady_wearable.ino` is the original firmware for the Nano 33
-BLE family. It reads the accelerometer and gyroscope 50 times a second, detects
-falls, and sends everything to the web app over BLE or USB serial.
-
-### Flash a device
-
-1. Install the Arduino IDE and open `steady_wearable/steady_wearable.ino`.
-2. In Library Manager, install **ArduinoBLE** and the IMU library for your board
-   (listed at the top of the sketch). Uncomment the matching `#define IMU_...`.
-3. Set a unique `DEVICE_ID` (e.g. `ST-0420`), then upload.
-
-### Test it in the web app
-
-Open **Settings** in Chrome or Edge, then:
-
-- **Connect over USB** with the board plugged in, or
-- **Connect over Bluetooth** with it powered by battery or USB.
-
-Live gyroscope and accelerometer readings appear, along with a self-test. Pick a
-resident and press **Pair** to assign the device.
-
-Bluetooth, USB and network connections from a web page need `localhost` or an
-`https://` page. Bluetooth and USB need Chrome or Edge on desktop or Android
-(Safari and Firefox support neither). The network transport only needs a
-WebSocket, which every browser has — but a page served over `https://` may not
-open a plain `ws://` socket, so use `localhost`, or put the board behind TLS if
-the dashboard is served from an https origin.
-
-## How data reaches the dashboard in a real home
-
-A browser connection is for setup and diagnostics: one device, one screen,
-nearby. Watching a whole wing all night needs a path that doesn't depend on a
-browser tab staying open:
-
-```
-wearable --BLE--> gateway in the wing --Wi-Fi--> backend --> Databricks --> web app
-   └── or, on the UNO Q: ──Bridge──► Python on the board ──Wi-Fi──► backend
-```
-
-- **Gateway:** the UNO Q itself, or a Raspberry Pi/ESP32 for BLE wearables, that
-  stays connected and forwards readings.
-- **Backend:** receives readings (MQTT or HTTPS), stores pairings, raises alerts,
-  and serves the API the web app reads instead of the placeholder files in
-  `src/data/`.
-
-The Python app does exactly this: `server/` is the backend, it keeps readings and
-alerts in Databricks, and the UNO Q relay posts a one-second summary to
-`/api/readings` and every fall to `/api/falls`. Survey mode's fingerprints are
-posted to the separate store in `web/`.
-
-The fall detection in both sketches is a simple threshold. It needs testing and
-tuning with real falls (a crash-test mat, a weighted dummy) before anyone relies
-on it.
+See [HANDOFF.md](HANDOFF.md) for the integration boundaries and remaining checks.

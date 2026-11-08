@@ -6,12 +6,12 @@ import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
 import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
+import { createConnectionSession } from '../hardware/connection-session'
 import type { MotionSample } from '../hardware/protocol'
-import { useLive, post, type DataMode } from '../live'
+import { useLive, type DataMode } from '../live'
 
 const LATEST_FIRMWARE = '1.4.2'
 const TRACE_MS = 5000
-const SEND_EVERY_MS = 1000
 
 const transportLabel: Record<Transport, string> = {
   wifi: 'Connected over Wi-Fi',
@@ -182,15 +182,6 @@ function Reading({ label, value, unit }: { label: string; value?: number; unit: 
   )
 }
 
-/** Movement score 0–100 from gyroscope activity, on the same scale the simulator uses */
-function summarize(samples: MotionSample[]) {
-  const gyro = samples.map((s) => Math.hypot(s.gx, s.gy, s.gz))
-  const accel = samples.map((s) => Math.hypot(s.ax, s.ay, s.az))
-  const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
-  const gyroDps = mean(gyro)
-  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel) }
-}
-
 function ConnectPanel() {
   const { mode, residents, pair } = useLive()
   const [conn, setConn] = useState<Connection>()
@@ -199,7 +190,6 @@ function ConnectPanel() {
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [residentId, setResidentId] = useState('')
-  const [sent, setSent] = useState<{ ok: number; note?: string }>({ ok: 0 })
   const [address, setAddress] = useState(savedAddress)
   // "I'm OK", an NFC tap, a survey or a room match, as the board reported it
   const [lastEvent, setLastEvent] = useState<string>()
@@ -207,11 +197,11 @@ function ConnectPanel() {
   // Samples arrive up to 50 times a second, so collect them in a ref and redraw a few times a second
   const buffer = useRef<MotionSample[]>([])
   const devRef = useRef<LiveDevice>(emptyDevice)
-  const lastSent = useRef(0)
-  const modeRef = useRef(mode)
-  modeRef.current = mode
-  // A board on Wi-Fi sends its own readings and falls to the server, so the browser doesn't
-  const forwardRef = useRef(true)
+  const session = useRef(createConnectionSession())
+
+  useEffect(() => () => {
+    session.current.close()
+  }, [])
 
   useEffect(() => {
     if (!conn) return
@@ -222,59 +212,45 @@ function ConnectPanel() {
       devRef.current = { ...devRef.current, rate: lastSecond.length }
       setDev(devRef.current)
       setTrace([...buffer.current])
-
-      // In "Live devices" mode, send a one-second summary to Databricks through the server
-      const d = devRef.current
-      if (forwardRef.current && modeRef.current === 'device' && d.id && lastSecond.length && now - lastSent.current >= SEND_EVERY_MS) {
-        lastSent.current = now
-        post('/api/readings', { deviceId: d.id, battery: d.battery ?? null, ...summarize(lastSecond) })
-          .then((r: { accepted: number }) =>
-            setSent((s) =>
-              r.accepted ? { ok: s.ok + 1 } : { ok: s.ok, note: 'Pair this device to a resident to send its readings' },
-            ),
-          )
-          .catch(() => setSent((s) => ({ ok: s.ok, note: 'Can’t reach the server' })))
-      }
     }, 100)
     return () => clearInterval(timer)
   }, [conn])
 
   const start = async (kind: Transport) => {
+    const attempt = session.current.begin()
+    const active = attempt.guard
     setError(undefined)
     setBusy(true)
-    setSent({ ok: 0 })
     setLastEvent(undefined)
     buffer.current = []
     devRef.current = { ...emptyDevice }
     setDev(devRef.current)
     const update = (patch: Partial<LiveDevice>) => (devRef.current = { ...devRef.current, ...patch })
-    forwardRef.current = kind !== 'wifi'
 
     const events = {
-      onInfo: (id: string, firmware: string) => update({ id, firmware }),
-      onBattery: (battery: number) => update({ battery }),
-      onMotion: (s: MotionSample) => {
+      onInfo: active((id: string, firmware: string) => update({ id, firmware })),
+      onBattery: active((battery: number) => update({ battery })),
+      onMotion: active((s: MotionSample) => {
         buffer.current.push(s)
         const moved = Math.hypot(s.gx, s.gy, s.gz) > 30
         update({ sample: s, gyroMoved: devRef.current.gyroMoved || moved })
-      },
-      onFall: () => {
-        update({ fallSeen: true })
-        // Fast path: falls go straight to the server
-        if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
-          post('/api/falls', { deviceId: devRef.current.id }).catch(() => {})
-      },
-      onOk: () => setLastEvent(`"I'm OK" pressed at ${stamp()}`),
-      onTap: (tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`),
-      onSurvey: (summary: { scans?: number; accessPoints?: number }) =>
-        setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`),
-      onLocation: (place: { room?: string; floor?: string; confidence?: number }) =>
+      }),
+      // Real boards send their own falls; demo events stay in this diagnostic view.
+      onFall: active(() => update({ fallSeen: true })),
+      onOk: active(() => setLastEvent(`"I'm OK" pressed at ${stamp()}`)),
+      onTap: active((tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`)),
+      onSurvey: active((summary: { scans?: number; accessPoints?: number }) =>
+        setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`)),
+      onLocation: active((place: { room?: string; floor?: string; confidence?: number }) =>
         setLastEvent(
           `Located in room ${place.room}${place.floor ? `, floor ${place.floor}` : ''}${
             place.confidence ? ` · ${place.confidence}%` : ''
           }`,
-        ),
-      onDisconnect: () => setConn(undefined),
+        )),
+      onDisconnect: active(() => {
+        attempt.disconnected()
+        setConn(undefined)
+      }),
     }
 
     try {
@@ -285,11 +261,13 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      setConn(kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events))
+      const connected = kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events)
+      if (!await attempt.attach(connected)) return
+      setConn(connected)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (attempt.isCurrent()) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      if (attempt.isCurrent()) setBusy(false)
     }
   }
 
@@ -313,7 +291,7 @@ function ConnectPanel() {
             id="board-address"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && address && start('wifi')}
+            onKeyDown={(e) => e.key === 'Enter' && address && !busy && start('wifi')}
             placeholder="Board address, e.g. unoq.local or 192.168.1.40"
             className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 font-mono text-sm text-fg placeholder:font-sans placeholder:text-fg-3 sm:max-w-80"
           />
@@ -390,10 +368,8 @@ function ConnectPanel() {
           </p>
           <p className="mt-1 text-xs text-fg-2">
             {conn.transport === 'wifi'
-              ? 'The board sends its own readings to Databricks. This view is for checking the sensor.'
-              : mode === 'device'
-                ? sent.note ?? (sent.ok ? `Sending to Databricks · ${sent.ok} summaries sent` : 'Sending to Databricks…')
-                : 'Not sending to Databricks. Switch the data source to Live devices to send these readings.'}
+              ? 'The board relay sends readings to the server. Check Last sync below to confirm delivery.'
+              : 'Demo readings and falls stay in this view. Use Simulated data to test dashboard alerts.'}
           </p>
         </div>
 
@@ -430,12 +406,11 @@ function ConnectPanel() {
               ))}
             </select>
             <button
-              disabled={!residentId || !dev.id}
+              disabled={!residentId || !dev.id || conn.transport === 'simulated'}
               onClick={async () => {
-                if (!dev.id) return
+                if (!dev.id || conn.transport === 'simulated') return
                 try {
                   await pair(residentId, dev.id, dev.firmware)
-                  setSent({ ok: sent.ok })
                 } catch (e) {
                   setError((e as Error).message)
                 }
@@ -445,6 +420,9 @@ function ConnectPanel() {
               Pair
             </button>
           </div>
+          {conn.transport === 'simulated' && (
+            <p className="mt-2 text-xs text-fg-3">Demo devices cannot be paired to residents.</p>
+          )}
           {mode === 'simulated' && (
             <p className="mt-2 text-xs text-fg-3">Pairings apply to Live devices mode.</p>
           )}

@@ -4,6 +4,7 @@
 import { sql, lit, SCHEMA, type Row } from './databricks.ts'
 import { loadMode, saveMode, insertAlerts, type Mode } from './schema.ts'
 import { startSimulator, stopSimulator, setFallen, backfillIfNeeded } from './simulator.ts'
+import { createBatchWriter } from './batch-writer.ts'
 
 const REFRESH_MS = 4000
 const WINDOW_HOURS = 4
@@ -122,7 +123,7 @@ async function refresh() {
     ),
     sql(
       `SELECT alert_id, resident_id, kind, raised_at, detail, handled_at, handled_by FROM ${SCHEMA}.alerts
-       WHERE source = :source AND raised_at > current_timestamp() - INTERVAL 12 HOURS
+       WHERE source = :source AND (handled_at IS NULL OR raised_at > current_timestamp() - INTERVAL 12 HOURS)
        ORDER BY raised_at DESC`,
       { source },
     ),
@@ -311,9 +312,11 @@ export interface DeviceReading {
   rssi?: number | null
 }
 
-// Real readings arrive every second or so; write them to Databricks in small batches
-let pending: string[] = []
-let flushTimer: NodeJS.Timeout | undefined
+// Batch across requests, but only acknowledge a reading after Databricks stores it.
+const writeReading = createBatchWriter<string>(async (rows) => {
+  await sql(`INSERT INTO ${SCHEMA}.readings (ts, resident_id, device_id, source, movement, gyro_dps, accel_g, heart_rate, battery, rssi)
+    VALUES ${rows.join(', ')}`)
+})
 const pairingCache = new Map<string, { residentId: string | null; at: number }>()
 
 async function cachedResident(deviceId: string) {
@@ -325,30 +328,16 @@ async function cachedResident(deviceId: string) {
 }
 
 export async function ingestReadings(readings: DeviceReading[]) {
-  let accepted = 0
+  const rows: string[] = []
   for (const r of readings) {
     const residentId = await cachedResident(r.deviceId)
     if (!residentId) continue // not paired yet
-    pending.push(
+    rows.push(
       `(${lit(r.ts ?? new Date().toISOString())}, ${lit(residentId)}, ${lit(r.deviceId)}, 'device', ${lit(r.movement)}, ${lit(r.gyroDps ?? null)}, ${lit(r.accelG ?? null)}, ${lit(r.heartRate ?? null)}, ${lit(r.battery ?? null)}, ${lit(r.rssi ?? null)})`,
     )
-    accepted++
   }
-  if (!flushTimer) flushTimer = setTimeout(flush, 3000)
-  return accepted
-}
-
-async function flush() {
-  flushTimer = undefined
-  const rows = pending
-  pending = []
-  if (!rows.length) return
-  try {
-    await sql(`INSERT INTO ${SCHEMA}.readings (ts, resident_id, device_id, source, movement, gyro_dps, accel_g, heart_rate, battery, rssi)
-      VALUES ${rows.join(', ')}`)
-  } catch (e) {
-    console.error('[ingest]', (e as Error).message)
-  }
+  await Promise.all(rows.map(writeReading))
+  return rows.length
 }
 
 /** Who cleared an alert, in words the dashboard shows next to it */
@@ -370,7 +359,7 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
   const by = ackLabel(kind, tag)
   const rows = await sql(
     `SELECT alert_id FROM ${SCHEMA}.alerts
-     WHERE resident_id = :resident AND handled_at IS NULL
+     WHERE resident_id = :resident AND source = 'device' AND handled_at IS NULL
      ORDER BY raised_at DESC LIMIT 1`,
     { resident: residentId },
   )

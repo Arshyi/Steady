@@ -3,6 +3,12 @@
 An Arduino App Lab App: a Zephyr sketch on the STM32U585 (real-time) plus a
 Python program on the QRB2210 (Wi-Fi uplink).
 
+This is the **alternative waveform pipeline** for the Worker/D1 app in
+[`web/`](../../web/README.md). The root React dashboard uses the different
+[`hardware/steady_unoq/`](../../hardware/steady_unoq/README.md) app. Do not mix
+their sketch/Python halves. See [UNO Q setup and storage](../../docs/UNO_Q_SETUP.md)
+for the 4 GB/32 GB board, 5 V/3 A power and database capacity recommendations.
+
 ## Install
 
 1. **Arduino App Lab** → *Create new app* → name it `steady`.
@@ -29,9 +35,13 @@ nmcli device show wlan0 | grep IP4.ADDRESS
 | --- | --- | --- |
 | VCC | 3V3 | 3.3 V logic board — never feed 5 V into an I2C pin |
 | GND | GND | |
-| SDA | A4 (or Qwiic SDA) | `Wire` is tried first, then `Wire1` (Qwiic) |
-| SCL | A5 (or Qwiic SCL) | |
+| SDA | Dedicated SDA/D20 (or Qwiic SDA) | `Wire` is tried first, then `Wire1` (Qwiic) |
+| SCL | Dedicated SCL/D21 (or Qwiic SCL) | |
 | AD0 | GND | `0x68` (default); `0x69` if tied high |
+
+A4/A5 use a separate `Wire2` bus on recent cores and are not probed by this
+firmware. Qwiic is 3.3 V only. A Modulino Movement would require its own
+LSM6DSOX driver; this MPU6050 driver cannot operate it unchanged.
 
 Only four wires are needed: the firmware polls the sensor at 200 Hz and does not
 use the INT pin. If you later want interrupt-driven sampling, wire INT to a free
@@ -147,3 +157,8 @@ checks. Expected output ends with `ALL CHECKS PASSED`.
    free-fall, impact, posture Δ and the waveform.
 6. Pull the Wi-Fi (`nmcli radio wifi off`), trigger another fall, then restore
    Wi-Fi: the event must appear after the spool replays.
+
+The JSONL outage spool is bounded and is not a local SQLite database. Test its
+queue/cap/restart behavior explicitly; it is not a guarantee that power loss or
+an indefinitely long outage preserves every event. Host tests do not validate
+real Bridge timing, Zephyr scheduling, sensor wiring or power behavior.

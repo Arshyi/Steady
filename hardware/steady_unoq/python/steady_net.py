@@ -149,6 +149,7 @@ class WebSocketServer:
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._socket.bind((host, port))
+        self.port = self._socket.getsockname()[1]  # allow an OS-selected port for isolated tests
         self._socket.listen(8)
         self._socket.settimeout(0.5)
 

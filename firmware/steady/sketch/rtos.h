@@ -153,7 +153,7 @@ class SteadyThread {
   }
 
   struct k_thread handle_{};
-  k_thread_t* tid_ = nullptr;
+  k_tid_t tid_ = nullptr;
   Entry entry_ = nullptr;
   void* arg_ = nullptr;
 };

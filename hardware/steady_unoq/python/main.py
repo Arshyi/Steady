@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import threading
 import time
@@ -49,6 +50,7 @@ from arduino.app_utils import App, Bridge
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import wifi_scan  # noqa: E402  (path set up above)
 from steady_net import WebSocketServer  # noqa: E402
+from reading_sender import ReadingSender  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -57,16 +59,16 @@ from steady_net import WebSocketServer  # noqa: E402
 CONFIG = {
     # Shown on the Settings page when a browser connects
     "device_id": "ST-UNOQ1",
-    "firmware": "1.1.0",
+    "firmware": "1.2.0",
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,
     # The Databricks backend (server/). Leave empty to send readings nowhere.
     #   "server_url": "http://192.168.1.20:8787"
-    "server_url": "http://127.0.0.1:8787",
-    # The survey store (web/). Needs the view key from web/.dev.vars.
-    "survey_url": "http://127.0.0.1:8788",
-    "survey_key": "dev-view-key",
+    "server_url": os.environ.get("STEADY_SERVER_URL", "http://127.0.0.1:8787"),
+    # Device writes require DEVICE_TOKEN; VIEW_KEY is only for the dashboard.
+    "survey_url": os.environ.get("STEADY_SURVEY_URL", "http://127.0.0.1:8788"),
+    "device_token": os.environ.get("STEADY_DEVICE_TOKEN", ""),
     # Survey mode: how many scans make up one room fingerprint
     "survey_scans": 5,
     "survey_interval_s": 1.5,
@@ -121,7 +123,8 @@ def _numbers(line: str, expected: int) -> list[float] | None:
     if len(parts) != expected:
         return None
     try:
-        return [float(part) for part in parts]
+        values = [float(part) for part in parts]
+        return values if all(math.isfinite(value) for value in values) and values[0] >= 0 else None
     except ValueError:
         return None
 
@@ -160,8 +163,10 @@ def _parse_tap(line: str) -> dict | None:
     if len(parts) != 2:
         return None
     try:
-        at = int(float(parts[0]))
+        at = int(parts[0])
     except ValueError:
+        return None
+    if at < 0:
         return None
     tag = parts[1].strip().replace(":", "").upper()[:32]
     return {"t": at, "tag": tag} if tag else None
@@ -174,15 +179,15 @@ def _parse_tap(line: str) -> dict | None:
 _failed: set[str] = set()
 
 
-def _post(base: str, path: str, payload: dict, key: str = "", timeout: float = 6.0) -> dict | None:
+def _post(base: str, path: str, payload: dict | list[dict], token: str = "", timeout: float = 6.0) -> dict | None:
     """POST JSON to one of the two backends. Logs one line per outage, not per call."""
     base = (base or "").strip().rstrip("/")
     if not base:
         return None
 
     headers = {"content-type": "application/json"}
-    if key:
-        headers["x-view-key"] = key
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(
         f"{base}{path}", data=json.dumps(payload).encode(), method="POST", headers=headers
     )
@@ -203,7 +208,7 @@ def _to_server(path: str, payload: dict) -> dict | None:
 
 
 def _to_survey_store(path: str, payload: dict) -> dict | None:
-    return _post(CONFIG.get("survey_url", ""), path, payload, key=CONFIG.get("survey_key", ""))
+    return _post(CONFIG.get("survey_url", ""), path, payload, token=CONFIG.get("device_token", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +218,19 @@ def _to_survey_store(path: str, payload: dict) -> dict | None:
 _window: list[dict] = []
 _window_lock = threading.Lock()
 _last_summary = 0.0
+_reading_sender: ReadingSender | None = None
+
+
+def _send_readings(batch: list[dict]) -> bool:
+    # The backend responds after its 3 s batch window and SQL commit. This call
+    # runs on a bounded background worker, never in the sensor/diagnostic loop.
+    result = _post(CONFIG.get("server_url", ""), "/api/readings", batch, timeout=45.0)
+    if not isinstance(result, dict):
+        return False
+    if result.get("accepted") != len(batch):
+        print(f"[steady] readings not accepted: pair {CONFIG['device_id']} to a resident")
+        return False
+    return True
 
 
 def _summarize(now: float) -> None:
@@ -232,8 +250,9 @@ def _summarize(now: float) -> None:
     gyro_dps = sum(gyro) / len(gyro)
     accel_g = sum(accel) / len(accel)
 
-    stored = _to_server(
-        "/api/readings",
+    if _reading_sender is None:
+        return  # server delivery is deliberately disabled when server_url is empty
+    _reading_sender.submit(
         {
             "deviceId": CONFIG["device_id"],
             "movement": min(100.0, gyro_dps / 2),
@@ -241,8 +260,6 @@ def _summarize(now: float) -> None:
             "accelG": round(accel_g, 3),
         },
     )
-    if stored is not None and not stored.get("accepted"):
-        print(f"[steady] server ignored the reading: pair {CONFIG['device_id']} to a resident")
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +302,13 @@ def _start_survey() -> None:
                     "scans": result["scans"],
                 },
             )
+            if stored is None:
+                print("[steady] survey capture was not stored; retry when the survey server is available")
+                return
             _broadcast(f"S,{result['scan_count']},{result['access_points']}")
             print(
                 f"[steady] survey stored: {result['scan_count']} scans, "
-                f"{result['access_points']} APs{' (not stored)' if stored is None else ''}"
+                f"{result['access_points']} APs"
             )
         finally:
             _survey_running = False
@@ -355,7 +375,9 @@ def _ack(kind: str, tag: str | None = None) -> None:
 
 def _hello(send) -> None:
     # No B (battery) line: the UNO Q cannot measure it, so the app shows "–"
-    send(f"I,{CONFIG['device_id']},{CONFIG['firmware']}\n")
+    # Never offer a fallback identity for pairing before the sketch answers.
+    if _checked_sketch:
+        send(f"I,{CONFIG['device_id']},{CONFIG['firmware']}\n")
 
 
 def _client_message(text: str) -> None:
@@ -371,21 +393,39 @@ def _client_message(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 _checked_sketch = False
+_next_info = 0.0
 _next_locate = 0.0
 _next_dummy_tap = 0.0
 
 
-def loop() -> None:
-    global _checked_sketch, _next_locate, _next_dummy_tap
-
-    if not _checked_sketch:
-        try:
-            info = Bridge.call("steady_info", timeout=2)
-            if isinstance(info, str) and info:
-                print(f"[steady] sketch reports {info}")
-        except Exception as exc:  # the sketch may still be booting
-            print(f"[steady] sketch info unavailable: {exc}")
+def _sync_identity(now: float) -> bool:
+    """The MCU identity is authoritative for browser pairing and HTTP posts."""
+    global _checked_sketch, _next_info
+    if _checked_sketch:
+        return True
+    if now < _next_info:
+        return False
+    _next_info = now + 5.0
+    try:
+        info = Bridge.call("steady_info", timeout=2)
+        if not isinstance(info, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64};[A-Za-z0-9_.+-]{1,32}", info):
+            raise ValueError("invalid sketch identity")
+        CONFIG["device_id"], CONFIG["firmware"] = info.split(";")
         _checked_sketch = True
+        _broadcast(f"I,{CONFIG['device_id']},{CONFIG['firmware']}")
+        print(f"[steady] sketch reports {info}")
+        return True
+    except Exception as exc:  # retry if the sketch is still booting
+        print(f"[steady] sketch info unavailable: {exc}")
+        return False
+
+
+def loop() -> None:
+    global _next_locate, _next_dummy_tap
+
+    if not _sync_identity(time.monotonic()):
+        time.sleep(0.01)
+        return
 
     while _samples:
         sample = _parse_motion(_samples.popleft())
@@ -451,7 +491,7 @@ def loop() -> None:
 
 
 def main() -> None:
-    global _server
+    global _server, _reading_sender
 
     Bridge.provide("steady_motion", _on_motion)
     Bridge.provide("steady_fall", _on_fall)
@@ -473,7 +513,14 @@ def main() -> None:
     if CONFIG.get("survey_url"):
         print(f"[steady] surveys, location and acks to {CONFIG['survey_url']}")
 
-    App.run(user_loop=loop)
+    if CONFIG.get("server_url"):
+        _reading_sender = ReadingSender(_send_readings).start()
+    try:
+        App.run(user_loop=loop)
+    finally:
+        if _reading_sender is not None:
+            _reading_sender.close()
+        _server.close()
 
 
 def _command(send, text: str) -> None:
