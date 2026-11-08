@@ -16,6 +16,7 @@ server, the Cloudflare Worker, and how to run the demo.
 | Fall detection | **Real**, runs on the board, verified with drops |
 | Readings to dashboard to alerts | **Real**, over USB serial (Web Serial) |
 | Pairing a device to a resident | **Real** |
+| Wi-Fi relay (`hardware/steady_unoq`) | **Written, never run on hardware**: the board's `wlan0` has never joined a network and the App Lab app is not installed |
 | Heart rate, battery, signal | Dummy values from each resident's profile |
 | Other residents | Dummy `DEMO-<room>` stream so the wing looks awake |
 | Databricks storage | Implemented, selected by env vars; every run here used the local store |
@@ -268,6 +269,13 @@ python hardware/steady_unoq/tools/simulator.py --port 8765
 
 Then connect the dashboard over Wi-Fi to `127.0.0.1`.
 
+Status: this path is unproven on the board. `wlan0` exists and is not blocked,
+but it has never joined a network, `~/ArduinoApps` is empty, and none of this code
+has run on hardware; only the laptop simulator has. To try it, join Wi-Fi in the
+App Lab, install the app, and set `server_url` and `survey_url` to the laptop's
+LAN address. The defaults are `127.0.0.1`, which on the board means the board
+itself, so uploads would go nowhere apart from one log line per outage.
+
 **`firmware/steady/` — RTOS app with waveform capture.** A Zephyr build with a
 200 Hz sampler thread, a detector thread, an orientation filter, a per-fall
 waveform ring buffer, and a Python uplink that spools to disk while the network is
@@ -346,6 +354,7 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 - **Databricks has not been exercised end to end** in this workspace; the local
   store has.
 - **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
+- **The Wi-Fi path has never run on the board.** Only USB serial and the laptop simulator have been exercised.
 - `web/` echoes any CORS origin, and `DEVICE_TOKEN` is shared by all devices.
   Restrict the origin and move to per-device tokens before deploying.
 
