@@ -31,10 +31,13 @@ export async function setupSchema() {
 
   await sql(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.alerts (
     alert_id STRING, resident_id STRING, kind STRING, raised_at TIMESTAMP,
-    detail STRING, handled_at TIMESTAMP, source STRING, handled_by STRING)`)
+    detail STRING, handled_at TIMESTAMP, source STRING, handled_by STRING,
+    acknowledged_at TIMESTAMP, acknowledged_by STRING)`)
 
   // Tables created before handled_by existed need the column adding once
   await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (handled_by STRING)`).catch(() => {})
+  // "I'm OK" now downgrades a fall instead of closing it, so the ack needs its own columns
+  await sql(`ALTER TABLE ${SCHEMA}.alerts ADD COLUMNS (acknowledged_at TIMESTAMP, acknowledged_by STRING)`).catch(() => {})
 
   await sql(`CREATE TABLE IF NOT EXISTS ${SCHEMA}.app_settings (key STRING, value STRING)`)
 

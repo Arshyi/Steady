@@ -25,15 +25,23 @@ export interface ResidentView {
   movement: (number | null)[]
 }
 
+/** How fast someone needs to reach an open fall. Every tier still needs a visit. */
+export type Urgency = 'critical' | 'urgent' | 'watch'
+
 export interface AlertView {
   id: string
   residentId: string
   kind: AlertKind
   raisedAt: string
   detail: string
+  /** Set when staff resolved it on the dashboard. A device press never sets this. */
   handledAt: string | null
-  /** Set when the wearable cleared it: "I'm OK button", "NFC tag 1B80" */
   handledBy: string | null
+  /** Set when the wearer pressed "I'm OK" or tapped a tag: the alert stays open. */
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
+  /** Falls only: no movement since the fall, not acknowledged, or acknowledged */
+  urgency: Urgency | null
 }
 
 export interface State {
@@ -70,8 +78,9 @@ export interface DeviceInfo {
 
 export interface AckResult {
   residentId: string
+  /** The open fall that was downgraded, if there was one */
   alertId: string | null
-  handledBy: string
+  acknowledgedBy: string
 }
 
 /**

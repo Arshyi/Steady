@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AlertRow } from '../components/board'
 import { Page, PageHeader } from '../components/PageHeader'
 import { useLive } from '../live'
-import type { Alert } from '../data/alerts'
+import { urgencyRank, type Alert } from '../data/alerts'
 import { countByStatus, LOW_BATTERY } from '../data/residents'
 
 /** One-line counts for the whole wing: residents first, then devices */
@@ -55,9 +55,8 @@ export function Alerts() {
   const [filter, setFilter] = useState<Filter>('all')
 
   const visible = alerts.filter((a) => matches(a, filter))
-  const active = visible.filter((a) => !a.handledAt).sort(newestFirst)
-  // Falls first among active, since they matter most
-  active.sort((a, b) => Number(b.kind === 'fall') - Number(a.kind === 'fall'))
+  // Most urgent first: a fall nobody has moved from outranks one the resident acknowledged
+  const active = visible.filter((a) => !a.handledAt).sort((a, b) => urgencyRank(a) - urgencyRank(b) || newestFirst(a, b))
   const handled = visible.filter((a) => a.handledAt).sort(newestFirst)
 
   return (

@@ -1,7 +1,7 @@
 import { Link } from 'react-router'
 import type { Resident, ResidentStatus } from '../data/residents'
 import { minutesAgo, clock, LOW_BATTERY } from '../data/residents'
-import { kindLabel, type Alert } from '../data/alerts'
+import { kindLabel, urgencyLabel, type Alert } from '../data/alerts'
 import { useLive } from '../live'
 
 /** Room number as a small door plate. Used wherever a room appears. */
@@ -70,6 +70,17 @@ function alertTitle(alert: Alert, name: string) {
   }
 }
 
+/** The tier on an open fall: who to see first, never whether to go at all */
+function UrgencyBadge({ alert }: { alert: Alert }) {
+  if (!alert.urgency) return null
+  const style = {
+    critical: 'border-fall-line bg-fall-soft text-fall',
+    urgent: 'border-line bg-raised text-check',
+    watch: 'border-line bg-card text-fg-2',
+  }[alert.urgency]
+  return <span className={`rounded border px-1.5 py-0.5 text-xs font-normal ${style}`}>{urgencyLabel[alert.urgency]}</span>
+}
+
 const buttonBase =
   'h-10 shrink-0 rounded-lg px-4 text-sm font-medium transition-[opacity,background-color,transform] duration-150 ease-out active:scale-[0.98]'
 
@@ -116,14 +127,21 @@ export function AlertRow({ alert, resident: given, onHandle, onUndo }: AlertRowP
     >
       <RoomPlate room={resident.room} />
       <div className="min-w-48 flex-1">
-        <p className="flex items-center gap-2 text-base font-medium text-fg">
+        <p className="flex flex-wrap items-center gap-2 text-base font-medium text-fg">
           <Dot kind={alert.kind} />
           <Link to={`/residents/${resident.id}`} className="hover:underline">
             {alertTitle(alert, resident.name)}
           </Link>
+          <UrgencyBadge alert={alert} />
         </p>
         <p className="mt-1 pl-4 text-sm text-fg-2">
           <span className="font-mono tabular-nums">{clock(alert.raisedAt)}</span> · {alert.detail}
+          {alert.acknowledgedAt && (
+            <>
+              {' '}
+              · I'm OK at <span className="font-mono tabular-nums">{clock(alert.acknowledgedAt)}</span>, still needs a visit
+            </>
+          )}
           {isFall && resident.heartRate !== null && (
             <>
               {' '}
@@ -140,7 +158,7 @@ export function AlertRow({ alert, resident: given, onHandle, onUndo }: AlertRowP
             : `${buttonBase} border border-line bg-raised text-fg hover:bg-page`
         }
       >
-        {isFall || alert.kind === 'check' ? 'Acknowledge' : 'Done'}
+        {isFall ? 'Mark checked' : alert.kind === 'check' ? 'Acknowledge' : 'Done'}
       </button>
     </div>
   )
