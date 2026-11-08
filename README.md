@@ -199,7 +199,7 @@ M,0.021,-0.004,1.003,0.4,-0.2,0.1
 
 Lying flat, `az` should be close to `1.000`, `ax`/`ay` near `0`, and the gyro near
 `0` when still. The `#` lines are diagnostics and are ignored by the dashboard. The
-sketch uses ±2 g and ±250 °/s; if you change `REG_ACCEL_CONFIG` or
+sketch uses ±8 g and ±250 °/s (±2 g clipped hard landings); if you change `REG_ACCEL_CONFIG` or
 `REG_GYRO_CONFIG`, update `ACCEL_LSB_PER_G` and `GYRO_LSB_PER_DPS` to match.
 
 ### Run the USB demo
@@ -356,9 +356,18 @@ and gyroscope values. The button has been pressed on the real board: one press p
 an "I'm OK" ack (the server records `acknowledgedBy`) that only lowers the fall's
 urgency, and three presses fire the survey gesture.
 
-Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
-board means the board itself, so uploads go nowhere). `survey_url` is separate and
-can stay empty until the Worker in `web/` is running somewhere the board can reach.
+Set the server address before installing: copy `python/config.example.json` to
+`python/config.json` (git-ignored, so each laptop keeps its own) and set
+`server_url` to the laptop's address on the board's Wi-Fi, port 8787, e.g.
+`http://10.200.3.118:8787`. `127.0.0.1` on the board means the board itself, so
+uploads go nowhere. The relay prints the address it uses when it starts.
+`STEADY_SERVER_URL` overrides the file. `survey_url` is separate and can stay empty
+until the Worker in `web/` is running somewhere the board can reach.
+
+If the server runs inside WSL, the board can't reach it on WSL's private address.
+Turn on mirrored networking (`[wsl2]` / `networkingMode=mirrored` in
+`%UserProfile%\.wslconfig`, then `wsl --shutdown`) and allow port 8787 through the
+Windows firewall.
 
 ### Two things that are easy to get wrong
 

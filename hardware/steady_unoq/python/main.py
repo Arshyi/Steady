@@ -61,9 +61,10 @@ CONFIG = {
     # 0.0.0.0 so the dashboard can reach the board over the care network
     "ws_host": "0.0.0.0",
     "ws_port": 8765,
-    # The Databricks backend (server/). Leave empty to send readings nowhere.
-    #   "server_url": "http://192.168.1.20:8787"
-    "server_url": "http://10.200.3.118:8787",
+    # The Steady server on the laptop running `npm run dev`, e.g.
+    # "http://192.168.1.20:8787". Set it in config.json (see config.example.json),
+    # not here: it differs per laptop and network. Empty sends readings nowhere.
+    "server_url": "",
     # The survey store (web/). Needs the view key from web/.dev.vars.
     "survey_url": "",
     "survey_key": "dev-view-key",
@@ -77,6 +78,31 @@ CONFIG = {
     "dummy_nfc_every_s": 0,
     "dummy_nfc_tag": "04A2339C1B80",
 }
+
+
+def _load_local_config() -> None:
+    """Per-laptop settings: config.json next to this file (git-ignored), then
+    STEADY_SERVER_URL. Anything in config.json overrides the defaults above."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    try:
+        with open(path) as f:
+            local = json.load(f)
+        CONFIG.update({k: v for k, v in local.items() if not k.startswith("_")})
+        print(f"[steady] loaded {path}")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as exc:
+        print(f"[steady] ignoring {path}: {exc}")
+    if os.environ.get("STEADY_SERVER_URL"):
+        CONFIG["server_url"] = os.environ["STEADY_SERVER_URL"]
+    CONFIG["server_url"] = str(CONFIG.get("server_url") or "").rstrip("/")
+    if CONFIG["server_url"]:
+        print(f"[steady] sending readings to {CONFIG['server_url']}")
+    else:
+        print("[steady] no server_url set: readings stay on the board (see config.example.json)")
+
+
+_load_local_config()
 
 # ---------------------------------------------------------------------------
 # Bridge handlers (called by the sketch — keep them trivial)

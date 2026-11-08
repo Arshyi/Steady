@@ -67,7 +67,9 @@ static constexpr uint8_t IMU_REG_ACCEL_XOUT_H = 0x3B;
 static constexpr uint8_t IMU_REG_PWR_MGMT_1 = 0x6B;
 static constexpr uint8_t IMU_REG_WHO_AM_I = 0x75;
 static constexpr uint8_t IMU_ADDRESSES[] = {0x68, 0x69};
-static constexpr float ACCEL_LSB_PER_G = 16384.0f;   // ±2 g
+// ±8 g: at ±2 g every axis tops out at 2 g, below the 2.6 g / 3.5 g impact
+// thresholds, so most landings could never register as a fall.
+static constexpr float ACCEL_LSB_PER_G = 4096.0f;    // ±8 g
 static constexpr float GYRO_LSB_PER_DPS = 65.5f;     // ±500 °/s
 
 // ---- fall detection (untuned: test with real drops before relying on it) ---
@@ -204,7 +206,7 @@ bool startImu() {
       imuWrite(IMU_REG_SMPLRT_DIV, 19);     // 1 kHz base rate / 20 = 50 Hz
       imuWrite(IMU_REG_CONFIG, 0x03);       // DLPF, ~44 Hz accelerometer bandwidth
       imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // +/-500 deg/s
-      imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // +/-2 g
+      imuWrite(IMU_REG_ACCEL_CONFIG, 0x10); // +/-8 g (AFS_SEL=2), matches ACCEL_LSB_PER_G
 
       Monitor.print("[steady] MPU6050 online at 0x");
       Monitor.print(imuAddress, HEX);
