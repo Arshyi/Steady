@@ -30,6 +30,12 @@ const LOW_BATTERY = 20
 const WEAK_RSSI = -80
 
 const SIM_EVERY_MS = 5000
+const DEMO_EVERY_MS = 3000
+
+// Demo mode for the Arduino accelerometer branch: one real sensor, everything
+// else made up. On by default in the local store; DEMO_FILL=0 turns it off.
+const DEMO_FILL = process.env.DEMO_FILL !== '0'
+const virtualDevice = (row: { room: string }) => `DEMO-${row.room}`
 
 type Source = 'device' | 'simulated'
 
@@ -73,6 +79,7 @@ let fallen = new Set<string>()
 let state: State = { mode, updatedAt: null, slots: [], residents: [], alerts: [], error: null }
 let refreshTimer: NodeJS.Timeout | undefined
 let simTimer: NodeJS.Timeout | undefined
+let demoTimer: NodeJS.Timeout | undefined
 
 export const getState = () => state
 
@@ -187,6 +194,42 @@ function stopSimulator() {
   simTimer = undefined
 }
 
+/**
+ * Device mode with demo fill: residents not currently sending real readings get
+ * a dummy stream, so the wing still looks populated around the real sensor.
+ */
+function demoTick() {
+  if (!DEMO_FILL || mode !== 'device') return
+  const now = Date.now()
+  for (const row of residentSeeds) {
+    const recent = readings.some(
+      (r) => r.source === 'device' && r.residentId === row.id && now - new Date(r.ts).getTime() < 5000,
+    )
+    if (recent) continue
+    const deviceId = pairings.get(row.id)?.deviceId ?? virtualDevice(row)
+    const reading = simulated({ id: row.id, simDevice: deviceId }, now, movementAt(profiles[row.id], 0, fallen.has(row.id)), {
+      fallen: fallen.has(row.id),
+    })
+    readings.push({ ...reading, source: 'device' })
+  }
+}
+
+function startDemo() {
+  if (!DEMO_FILL || demoTimer) return
+  demoTimer = setInterval(() => {
+    try {
+      demoTick()
+    } catch (e) {
+      console.error('[local demo]', (e as Error).message)
+    }
+  }, DEMO_EVERY_MS)
+}
+
+function stopDemo() {
+  if (demoTimer) clearInterval(demoTimer)
+  demoTimer = undefined
+}
+
 // ---------- status ----------
 
 function refresh() {
@@ -233,7 +276,8 @@ function refresh() {
     const list = byResident.get(row.id) ?? []
     const latest = list.reduce<Reading | null>((best, r) => (!best || r.ts > best.ts ? r : best), null)
     const pairing = mode === 'device' ? pairings.get(row.id) : undefined
-    const deviceId = mode === 'simulated' ? row.simDevice : pairing?.deviceId ?? null
+    const demoFill = DEMO_FILL && mode === 'device'
+    const deviceId = mode === 'simulated' ? row.simDevice : pairing?.deviceId ?? (demoFill ? virtualDevice(row) : null)
 
     const lastSyncSec = latest ? Math.max(0, Math.round((Date.now() - new Date(latest.ts).getTime()) / 1000)) : null
     const moved = list.filter((r) => r.movement >= MOVING).map((r) => r.ts).sort()
@@ -254,6 +298,12 @@ function refresh() {
 
     const rates = list.map((r) => r.heartRate).filter((v): v is number => v !== null)
 
+    // Dummy vitals so a real accelerometer does not leave the rest of the row blank
+    const profile = profiles[row.id]
+    const heartRate = latest?.heartRate ?? (demoFill ? Math.round(profile.hrBase + rand(-2, 2)) : null)
+    const battery = latest?.battery ?? (demoFill ? Math.max(1, profile.battery - 2) : null)
+    const rssi = latest?.rssi ?? (demoFill ? profile.rssi : null)
+
     return {
       id: row.id,
       name: row.name,
@@ -261,15 +311,19 @@ function refresh() {
       status,
       note,
       lastMovementMin: sinceMoved === null ? null : Math.floor(sinceMoved),
-      heartRate: latest?.heartRate ?? null,
-      heartRateRange: rates.length ? [Math.min(...rates), Math.max(...rates)] : null,
+      heartRate,
+      heartRateRange: rates.length
+        ? [Math.min(...rates), Math.max(...rates)]
+        : heartRate !== null
+          ? [heartRate - 4, heartRate + 7]
+          : null,
       device: deviceId
         ? {
             id: deviceId,
             firmware: mode === 'simulated' ? row.simFirmware : pairing?.firmware ?? null,
-            battery: latest?.battery ?? null,
-            signal: signalOf(latest?.rssi ?? null),
-            rssi: latest?.rssi ?? null,
+            battery,
+            signal: signalOf(rssi),
+            rssi,
             lastSyncSec,
             wornSince: list.length ? list.reduce((a, b) => (a.ts < b.ts ? a : b)).ts : null,
           }
@@ -373,7 +427,7 @@ export async function start() {
   if (mode === 'simulated') {
     if (backfill()) console.log('[local] wrote tonight’s simulated history')
     startSimulator()
-  }
+  } else startDemo()
   loop()
   console.log(`[local] data source: ${DATA_FILE.pathname}`)
 }
@@ -386,8 +440,10 @@ export async function setMode(next: Mode) {
   if (next === 'simulated') {
     backfill()
     startSimulator()
+    stopDemo()
   } else {
     stopSimulator()
+    startDemo()
     fallen = new Set()
   }
   refreshSoon()

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Wifi, Check, Circle, Lightbulb } from 'lucide-react'
+import { Wifi, Check, Circle, Lightbulb, Usb } from 'lucide-react'
 import { Page } from '../components/PageHeader'
 import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
 import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
+import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
 
@@ -15,6 +16,7 @@ const SEND_EVERY_MS = 1000
 
 const transportLabel: Record<Transport, string> = {
   wifi: 'Connected over Wi-Fi',
+  serial: 'Arduino UNO over USB',
   simulated: 'Demo device',
 }
 
@@ -285,7 +287,9 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      setConn(kind === 'wifi' ? await connectWifi(address, events) : await connectSimulated(events))
+      if (kind === 'wifi') setConn(await connectWifi(address, events))
+      else if (kind === 'serial') setConn(await connectSerial(events))
+      else setConn(await connectSimulated(events))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -302,8 +306,8 @@ function ConnectPanel() {
       <section className="rounded-xl border border-line bg-card p-5">
         <h2 className="text-base font-medium">Connect a device</h2>
         <p className="mt-1 max-w-[40rem] text-sm text-fg-2">
-          Connect a wearable over Wi-Fi to check its sensors are working and pair it to a resident. The board must be
-          on the same network as this computer.
+          Connect a wearable over Wi-Fi, or an Arduino UNO with an accelerometer over USB, to check the sensor is
+          working and pair it to a resident.
         </p>
         <div className="mt-5 flex flex-wrap gap-2">
           <label className="sr-only" htmlFor="board-address">
@@ -326,6 +330,14 @@ function ConnectPanel() {
             Connect over Wi-Fi
           </button>
           <button
+            disabled={busy || !serialSupported()}
+            onClick={() => start('serial')}
+            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line bg-raised px-4 text-sm text-fg transition-colors duration-150 hover:bg-page disabled:opacity-40"
+          >
+            <Usb className="h-4 w-4" strokeWidth={1.5} />
+            Connect Arduino (USB)
+          </button>
+          <button
             disabled={busy}
             onClick={() => start('simulated')}
             className="h-10 px-2 text-sm text-fg-2 transition-colors duration-150 hover:text-fg"
@@ -333,6 +345,11 @@ function ConnectPanel() {
             Try a demo device
           </button>
         </div>
+        {!serialSupported() && (
+          <p className="mt-3 text-xs text-fg-3">
+            USB serial needs Chrome or Edge on desktop. Use Wi-Fi or the demo device otherwise.
+          </p>
+        )}
         {error && <p className="mt-3 text-sm text-fall">{error}</p>}
       </section>
     )
@@ -353,7 +370,7 @@ function ConnectPanel() {
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          {conn.transport !== 'simulated' && (
+          {conn.transport === 'wifi' && (
             <button
               onClick={() => conn.identify()}
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-line bg-raised px-3 text-sm text-fg transition-colors duration-150 hover:bg-page"

@@ -87,3 +87,13 @@ npm run dev                 # dashboard + server
 npm run sim:device          # posts 10 Hz batches as ST-UNOQ1
 npm run sim:device -- --fall-every 90 --minutes 5
 ```
+
+### Demo fill (Arduino accelerometer branch)
+
+In the local store, device mode fills in dummy data for everything that is not
+real: residents with no live device get a `DEMO-<room>` stream, and a real device
+gets dummy heart rate, battery and signal so its row is not half empty. This is
+what makes the UNO + accelerometer demo look like a working wing. Turn it off
+with `DEMO_FILL=0` to see only what the hardware actually sends.
+
+See `arduino/README.md` for wiring and upload steps.

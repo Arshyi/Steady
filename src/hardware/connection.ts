@@ -1,9 +1,10 @@
-// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), or a built-in demo device.
+// Connects to a Steady wearable over Wi-Fi (the UNO Q relay), an Arduino over USB
+// (serial.ts), or a built-in demo device.
 // Both give the same events, so the Settings page doesn't care which one is used.
 
 import { WIFI_PORT, type MotionSample } from './protocol'
 
-export type Transport = 'wifi' | 'simulated'
+export type Transport = 'wifi' | 'serial' | 'simulated'
 
 /** How a survey capture ended, as reported by the board */
 export interface SurveySummary {
@@ -41,7 +42,7 @@ export interface Connection {
 }
 
 /** Parse one text line from the device (format in protocol.ts) */
-function handleLine(line: string, ev: DeviceEvents) {
+export function handleLine(line: string, ev: DeviceEvents) {
   const parts = line.split(',')
   switch (parts[0]) {
     case 'I':
