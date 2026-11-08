@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Steady — fall monitoring</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="pulse" aria-hidden="true"></span>
+        <h1>Steady</h1>
+        <span class="tag">UNO Q · MPU6050 fall monitor</span>
+      </div>
+      <div class="controls">
+        <label class="field">
+          <span>Device</span>
+          <select id="device-select" aria-label="Device"></select>
+        </label>
+        <button id="refresh" class="btn" type="button">Refresh</button>
+        <button id="logout" class="btn ghost" type="button" title="Clear the saved view key">Lock</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="auth" class="panel auth hidden">
+        <h2>Unlock the dashboard</h2>
+        <p class="muted">
+          Paste the view key this Worker was deployed with (<code>VIEW_KEY</code>).
+          It is stored in this browser only and sent as <code>x-view-key</code>.
+        </p>
+        <div class="row">
+          <input id="key-input" type="password" placeholder="view key" autocomplete="off" />
+          <button id="key-save" class="btn primary" type="button">Unlock</button>
+        </div>
+      </section>
+
+      <section class="kpis" id="kpis">
+        <article class="kpi">
+          <h2>Last sample</h2>
+          <p id="kpi-last">—</p>
+          <span id="kpi-firmware" class="sub"></span>
+        </article>
+        <article class="kpi">
+          <h2>Posture</h2>
+          <p id="kpi-posture">—</p>
+          <span id="kpi-tilt" class="sub"></span>
+        </article>
+        <article class="kpi">
+          <h2>Activity index</h2>
+          <p id="kpi-activity">—</p>
+          <span class="sub">|a| deviation over the window</span>
+        </article>
+        <article class="kpi alert">
+          <h2>Fall alerts</h2>
+          <p id="kpi-falls">—</p>
+          <span id="kpi-fall-sub" class="sub"></span>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <header>
+            <h2>Acceleration magnitude</h2>
+            <span class="legend">
+              <i class="sw svm"></i>|a|
+              <i class="sw impact"></i>impact 2.5 g
+              <i class="sw freefall"></i>free-fall 0.5 g
+            </span>
+          </header>
+          <canvas id="chart-svm" height="220"></canvas>
+        </article>
+        <article class="panel">
+          <header>
+            <h2>Posture</h2>
+            <span class="legend"><i class="sw tilt"></i>tilt from vertical</span>
+          </header>
+          <canvas id="chart-tilt" height="220"></canvas>
+        </article>
+      </section>
+
+      <section class="panel">
+        <header>
+          <h2>Fall candidates</h2>
+          <a id="export" class="link" href="#">Export raw CSV</a>
+        </header>
+        <div class="table-wrap">
+          <table id="events">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Device</th>
+                <th>Server</th>
+                <th>Impact</th>
+                <th>Tilt Δ</th>
+                <th>Confidence</th>
+                <th>Review</th>
+              </tr>
+            </thead>
+            <tbody id="events-body">
+              <tr><td colspan="7" class="muted">No fall candidates yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="detail" class="panel hidden">
+        <header>
+          <h2 id="detail-title">Event detail</h2>
+          <button id="detail-close" class="btn ghost" type="button">Close</button>
+        </header>
+        <div id="detail-body"></div>
+      </section>
+    </main>
+
+    <footer class="muted">
+      <span id="status">idle</span> · data from the device's own detector, re-analysed server-side
+    </footer>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

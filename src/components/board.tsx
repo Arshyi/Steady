@@ -85,6 +85,7 @@ export function AlertRow({ alert, onHandle, onUndo }: { alert: Alert; onHandle: 
           </Link>{' '}
           · {kindLabel[alert.kind].toLowerCase()} at <span className="font-mono tabular-nums">{alert.time}</span>,
           handled at <span className="font-mono tabular-nums">{alert.handledAt}</span>
+          {alert.handledBy && <> · via {alert.handledBy}</>}
         </p>
         <button onClick={onUndo} className="text-sm text-fg-2 transition-colors duration-150 hover:text-fg">
           Undo

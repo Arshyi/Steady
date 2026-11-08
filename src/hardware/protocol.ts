@@ -53,16 +53,24 @@ export function parseMotion(view: DataView): Omit<MotionSample, 't'> {
 
 /**
  * `hardware/steady_unoq` serves the same six channels over a WebSocket instead
- * of Bluetooth: the sketch reads the Modulino Movement and hands each sample to
- * Python over the Bridge, and the Python app broadcasts JSON text frames.
+ * of Bluetooth: the sketch reads the Modulino Movement, the button and the NFC
+ * reader, and hands each event to Python over the Bridge, which broadcasts JSON
+ * text frames.
  *
- *   server → app   {"type":"hello","device":"ST-UNOQ1","firmware":"1.0.0","rate":50}
+ *   server → app   {"type":"hello","device":"ST-UNOQ1","firmware":"1.1.0","rate":50}
  *                  {"type":"motion","t":12345,"ax":0.02,"ay":-0.01,"az":1,"gx":12.4,"gy":-3.1,"gz":0.8}
  *                  {"type":"fall","t":12980,"peak":3.42}
+ *                  {"type":"ok","t":13110}
+ *                  {"type":"tap","t":14400,"tag":"04A2339C1B80"}
+ *                  {"type":"survey","id":12,"scans":5,"accessPoints":9,"takenAt":1690000000000}
+ *                  {"type":"location","room":"103","floor":"1","confidence":82}
  *   app → server   {"type":"identify"}
+ *                  {"type":"survey"}      ask the board to capture a room now
  *
  * g and °/s again; `t` is the device's uptime in ms and is optional because the
- * app times samples with performance.now() like the other transports do.
+ * app times samples with performance.now() like the other transports do. The
+ * survey and location frames come from the backend round-trip, so they only
+ * appear when the board is configured with a backend URL.
  */
 export const NETWORK_DEFAULT_URL = 'ws://127.0.0.1:8765'
 
@@ -73,10 +81,18 @@ export type NetworkMessage =
   | { type: 'hello'; device?: string; firmware?: string; rate?: number }
   | { type: 'motion'; t?: number; ax: number; ay: number; az: number; gx: number; gy: number; gz: number }
   | { type: 'fall'; t?: number; peak?: number }
+  | { type: 'ok'; t?: number }
+  | { type: 'tap'; t?: number; tag?: string }
+  | { type: 'survey'; id?: number; scans?: number; accessPoints?: number; takenAt?: number }
+  | { type: 'location'; room?: string; floor?: string; confidence?: number }
   | { type: 'error'; message?: string }
 
 function number(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 /** Reads one frame from the UNO Q. Malformed or unknown frames return undefined. */
@@ -96,8 +112,8 @@ export function parseNetworkMessage(raw: string): NetworkMessage | undefined {
     case 'hello':
       return {
         type: 'hello',
-        device: typeof frame.device === 'string' ? frame.device : undefined,
-        firmware: typeof frame.firmware === 'string' ? frame.firmware : undefined,
+        device: text(frame.device),
+        firmware: text(frame.firmware),
         rate: number(frame.rate),
       }
     case 'motion': {
@@ -113,8 +129,27 @@ export function parseNetworkMessage(raw: string): NetworkMessage | undefined {
     }
     case 'fall':
       return { type: 'fall', t, peak: number(frame.peak) }
+    case 'ok':
+      return { type: 'ok', t }
+    case 'tap':
+      return { type: 'tap', t, tag: text(frame.tag) }
+    case 'survey':
+      return {
+        type: 'survey',
+        id: number(frame.id),
+        scans: number(frame.scans),
+        accessPoints: number(frame.accessPoints),
+        takenAt: number(frame.takenAt),
+      }
+    case 'location':
+      return {
+        type: 'location',
+        room: text(frame.room),
+        floor: text(frame.floor),
+        confidence: number(frame.confidence),
+      }
     case 'error':
-      return { type: 'error', message: typeof frame.message === 'string' ? frame.message : undefined }
+      return { type: 'error', message: text(frame.message) }
     default:
       return undefined
   }

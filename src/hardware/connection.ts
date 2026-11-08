@@ -13,12 +13,35 @@ import {
 
 export type Transport = 'bluetooth' | 'usb' | 'network' | 'simulated'
 
+/** How a survey capture ended, as reported by the board */
+export interface SurveySummary {
+  id?: number
+  scans?: number
+  accessPoints?: number
+  takenAt?: number
+}
+
+/** The room the backend matched to the board's Wi-Fi fingerprint */
+export interface KnownLocation {
+  room?: string
+  floor?: string
+  confidence?: number
+}
+
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
   onBattery: (percent: number) => void
   onMotion: (sample: MotionSample) => void
   onFall: () => void
   onDisconnect: () => void
+  /** The wearer pressed the button once: "I'm OK". */
+  onOk?: (at: number) => void
+  /** A staff member tapped an NFC tag on the wearable. */
+  onTap?: (tag: string, at: number) => void
+  /** The board finished a survey capture (three presses, or asked from here). */
+  onSurvey?: (summary: SurveySummary) => void
+  /** The backend placed the device in a room after a scan. */
+  onLocation?: (location: KnownLocation) => void
 }
 
 export interface Connection {
@@ -215,6 +238,18 @@ export async function connectNetwork(url: string, ev: DeviceEvents): Promise<Con
       case 'fall':
         ev.onFall()
         break
+      case 'ok':
+        ev.onOk?.(message.t ?? Date.now())
+        break
+      case 'tap':
+        ev.onTap?.(message.tag ?? 'unknown', message.t ?? Date.now())
+        break
+      case 'survey':
+        ev.onSurvey?.(message)
+        break
+      case 'location':
+        ev.onLocation?.(message)
+        break
       case 'error':
         break
     }
@@ -264,12 +299,26 @@ export async function connectSimulated(ev: DeviceEvents): Promise<Connection> {
   // Simulated fall after 8 seconds so the fall check can pass
   const fallTimer = setTimeout(ev.onFall, 8000)
 
+  // The button and NFC paths, so the survey panel can be exercised without a board
+  const okTimer = setInterval(() => ev.onOk?.(Date.now()), 21_000)
+  const tapTimer = setInterval(() => ev.onTap?.('04A2339C1B80', Date.now()), 27_000)
+  const surveyTimer = setInterval(() => ev.onSurvey?.({ scans: 5, accessPoints: 8 }), 41_000)
+  // The network transport learns the room from the backend; here it is faked.
+  const locationTimer = setInterval(
+    () => ev.onLocation?.({ room: '103', floor: '1', confidence: 82 }),
+    13_000,
+  )
+
   return {
     transport: 'simulated',
     identify: async () => {},
     disconnect: async () => {
       clearInterval(timer)
       clearTimeout(fallTimer)
+      clearInterval(okTimer)
+      clearInterval(tapTimer)
+      clearInterval(surveyTimer)
+      clearInterval(locationTimer)
       ev.onDisconnect()
     },
   }

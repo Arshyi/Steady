@@ -6,3 +6,10 @@ dist
 # Python
 __pycache__/
 *.pyc
+
+# Steady worker locals
+web/.dev.vars
+web/.wrangler/
+web/.wrangler-dev.log
+__pycache__/
+*.pyc

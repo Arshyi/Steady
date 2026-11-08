@@ -11,10 +11,13 @@ import {
   connectSimulated,
   support,
   type Connection,
+  type DeviceEvents,
   type Transport,
 } from '../hardware/connection'
 import { NETWORK_DEFAULT_URL, NETWORK_URL_KEY, type MotionSample } from '../hardware/protocol'
 import { usePairings } from '../hardware/pairings'
+import { useAlerts } from '../alerts'
+import { SurveyPanel } from '../components/SurveyPanel'
 
 const LATEST_FIRMWARE = '1.4.2'
 const TRACE_MS = 5000
@@ -34,6 +37,8 @@ interface Live {
   rate: number
   gyroMoved: boolean
   fallSeen: boolean
+  /** Last button press, NFC tap or survey capture, for the location panel */
+  lastEvent?: string
 }
 
 const emptyLive: Live = { rate: 0, gyroMoved: false, fallSeen: false }
@@ -87,6 +92,28 @@ function ConnectPanel({ pairings, pair }: Pairings) {
   const buffer = useRef<MotionSample[]>([])
   const liveRef = useRef<Live>(emptyLive)
 
+  // Event handlers are captured when the connection starts, so read current
+  // alert and pairing state through refs instead of that first render's values.
+  const { alerts, handle } = useAlerts()
+  const alertsRef = useRef(alerts)
+  const pairingsRef = useRef(pairings)
+  useEffect(() => {
+    alertsRef.current = alerts
+    pairingsRef.current = pairings
+  })
+
+  /** An OK press or a staff tap clears the paired resident's open fall or check. */
+  const acknowledge = (by: string) => {
+    const deviceId = liveRef.current.id
+    if (!deviceId) return
+    const resident = residents.find((r) => pairingsRef.current[r.id] === deviceId)
+    if (!resident) return
+    const open = alertsRef.current.find(
+      (a) => a.residentId === resident.id && !a.handledAt && (a.kind === 'fall' || a.kind === 'check'),
+    )
+    if (open) handle(open.id, by)
+  }
+
   useEffect(() => {
     if (!conn) return
     const timer = setInterval(() => {
@@ -108,7 +135,7 @@ function ConnectPanel({ pairings, pair }: Pairings) {
     setLive(liveRef.current)
     const update = (patch: Partial<Live>) => (liveRef.current = { ...liveRef.current, ...patch })
 
-    const events = {
+    const events: DeviceEvents = {
       onInfo: (id: string, firmware: string) => update({ id, firmware }),
       onBattery: (battery: number) => update({ battery }),
       onMotion: (s: MotionSample) => {
@@ -117,6 +144,16 @@ function ConnectPanel({ pairings, pair }: Pairings) {
         update({ sample: s, gyroMoved: liveRef.current.gyroMoved || moved })
       },
       onFall: () => update({ fallSeen: true }),
+      onOk: () => {
+        update({ lastEvent: "Wearer pressed I'm OK" })
+        acknowledge("I'm OK button")
+      },
+      onTap: (tag: string) => {
+        update({ lastEvent: `NFC tap ${tag.slice(-4)}` })
+        acknowledge(`NFC tag ${tag.slice(-4)}`)
+      },
+      onSurvey: (summary) =>
+        update({ lastEvent: `Survey: ${summary.scans ?? 0} scans, ${summary.accessPoints ?? 0} APs` }),
       onDisconnect: () => setConn(undefined),
     }
 
@@ -309,6 +346,10 @@ function ConnectPanel({ pairings, pair }: Pairings) {
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="mt-6 border-t border-line pt-5">
+        <SurveyPanel device={live.id} lastEvent={live.lastEvent} />
       </div>
     </section>
   )

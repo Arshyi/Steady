@@ -10,3 +10,7 @@ profiles:
     libraries:
       - Arduino_Modulino
       - Arduino_RouterBridge
+      # Reply to an alert by tapping an NFC tag on the wearable. Without this
+      # library the sketch still builds: the NFC block is compiled out and the
+      # Monitor says so at boot.
+      - Adafruit PN532

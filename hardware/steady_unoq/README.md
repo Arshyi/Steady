@@ -7,6 +7,7 @@ the local network.
 ```
 Modulino Movement ──Qwiic (Wire1)──► STM32 sketch ──Bridge──► python/main.py ──WebSocket──► Settings page
         LSM6DSOX                    50 Hz + fall test          8765                       src/hardware/connection.ts
+Button (D2→GND) + PN532 (I2C) ─────► presses, NFC taps ───────► survey scans ──HTTP──► Worker (web/)
 ```
 
 ## Why this exists next to `../steady_wearable`
@@ -52,6 +53,24 @@ and the Python console:
 Find the board's address with `nmcli device show wlan0 | grep IP4.ADDRESS`, or
 from the network panel in App Lab.
 
+## Button and NFC reader
+
+| Part | Connect to | Notes |
+| --- | --- | --- |
+| Momentary button | D2 and GND | `INPUT_PULLUP`, so no resistor; a press reads LOW |
+| PN532 (I2C) | A4 (SDA), A5 (SCL), 3V3, GND | **not** the Qwiic chain — the Modulino owns `Wire1` |
+
+One press means "I'm OK". Three presses within 2.5 s start a survey, and the
+gesture is decided 650 ms after the last press, so a single press reports after
+about two thirds of a second. Two presses are ignored as a fumble. The LED
+answers each gesture: one blink for OK, two for a tag, four for a survey.
+
+NFC is compiled in only when App Lab has the **Adafruit PN532** library
+installed (`__has_include`). Without it the Monitor prints
+`[steady] NFC off: install the Adafruit PN532 library to enable taps` and every
+other feature keeps working. The reader is on `Wire` (A4/A5) because
+`Modulino.begin()` takes `Wire1`.
+
 ## What the sketch sends
 
 Fifty samples a second, one Bridge call each, plus one call per fall:
@@ -60,6 +79,9 @@ Fifty samples a second, one Bridge call each, plus one call per fall:
 | --- | --- |
 | `steady_motion` | `"<ms>,<ax>,<ay>,<az>,<gx>,<gy>,<gz>"` g and °/s |
 | `steady_fall` | `"<ms>,<peak_g>,<free_fall_ms>"` |
+| `steady_ok` | `"<ms>,1"` — one button press, "I'm OK" |
+| `steady_survey` | `"<ms>,3"` — three presses, capture this room |
+| `steady_nfc` | `"<ms>,<uid hex>"` — an NFC tag was tapped on the reader |
 
 | Python → Sketch | Effect |
 | --- | --- |
@@ -75,27 +97,51 @@ Fifty samples a second, one Bridge call each, plus one call per fall:
 | `{"type":"hello","device":"ST-UNOQ1","firmware":"1.0.0","rate":50}` | sent once on connect |
 | `{"type":"motion","t":12345,"ax":0.02,"ay":-0.01,"az":1.0,"gx":12.4,"gy":-3.1,"gz":0.8}` | one sample |
 | `{"type":"fall","t":12980,"peak":3.42}` | fall confirmed by the MCU |
+| `{"type":"ok","t":13110}` | the wearer pressed the button once |
+| `{"type":"tap","t":14400,"tag":"04A2339C1B80"}` | a staff NFC tag was tapped |
+| `{"type":"survey","scans":5,"accessPoints":9,"id":12}` | a capture finished, and its backend id if it was stored |
+| `{"type":"location","room":"103","floor":"1","confidence":82}` | the backend matched the latest scan |
 
 | App → server | Meaning |
 | --- | --- |
 | `{"type":"identify"}` | blink the LED |
+| `{"type":"survey"}` | capture the current room now (same as three presses) |
 
 The server is `python/steady_net.py`, a WebSocket implementation on the standard
 library alone — the board has no guaranteed pip packages, and the app should not
 depend on an install step.
 
-## Forwarding to the backend (optional)
+## Survey mode and acknowledgements (optional)
 
-Under `CONFIG` in `python/main.py`, set `forward_url` (and `forward_token`) to
-have falls POSTed the moment they happen:
+Set the backend under `CONFIG` in `python/main.py` and the board starts posting
+what the dashboard needs:
 
 ```python
-"forward_url": "http://192.168.1.20:8787/api/v1/ingest",
-"forward_samples": False,   # leave off until the backend can take 50 Hz per resident
+"backend_url": "http://192.168.1.20:8787",
+"backend_token": "dev-token",      # DEVICE_TOKEN from web/.dev.vars
+"survey_scans": 5,
+"survey_interval_s": 1.5,
+"locate_every_s": 300,             # scan and match every 5 min (0 = only on demand)
 ```
 
-Falls always go immediately; samples only if you turn `forward_samples` on.
-Databricks/analytics sits behind that backend and is not implemented here.
+With a backend URL set:
+
+* Three presses run 5 Wi-Fi scans and `POST /api/v1/surveys`. Nothing is stored
+  until someone names the room in the dashboard's Settings page, so a capture
+  taken in the wrong place costs one row, not a wrong fingerprint.
+* Every `locate_every_s` the board scans once and posts `/api/v1/locate`; the
+  Worker matches it against the labelled fingerprints and stores where it thinks
+  the device is. `GET /api/v1/location?device=…` returns that, and a fall alert
+  on the dashboard can read the same room and floor.
+* An OK press posts `/api/v1/acks` with `kind: "ok"`, a tag tap with
+  `kind: "nfc"` and the tag's UID.
+* Falls still go to `/api/v1/ingest`.
+
+The scans themselves use `nmcli`, `iw` or `iwlist`, whichever the board has;
+`python/wifi_scan.py` holds the parsers and prefers real dBm from `iw`. Leave
+`backend_url` empty to run the board standalone — everything except surveys,
+location and acks keeps working, and the dashboard's Settings page still shows
+live readings.
 
 ## Testing without the board
 
@@ -103,8 +149,10 @@ Databricks/analytics sits behind that backend and is not implemented here.
 python hardware/steady_unoq/tools/simulator.py --port 8765
 ```
 
-It speaks the same protocol (hello, 50 Hz motion, a fall every 12 s) so the
-Settings page can be exercised on a laptop. It needs no third-party packages.
+It speaks the same protocol (hello, 50 Hz motion, a fall every 12 s) and also
+emits `ok`, `tap`, `survey` and `location` frames, so the whole Settings page —
+including the location panel — can be exercised on a laptop. It needs no
+third-party packages.
 
 ## Tuning the fall test
 

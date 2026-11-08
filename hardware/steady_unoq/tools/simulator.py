@@ -4,9 +4,10 @@ Use it to work on the Settings page when no UNO Q is at hand:
 
     python hardware/steady_unoq/tools/simulator.py --port 8765
 
-It serves exactly what `python/main.py` serves — hello, 50 Hz motion, the odd
-fall — so `connectNetwork` in the dashboard behaves the same. Stop it with
-Ctrl+C.
+It serves what `python/main.py` serves — hello, 50 Hz motion, falls — plus the
+survey-mode and NFC traffic (an "I'm OK" press, a responder tap, a labelled-able
+survey and a location match) so every dashboard state can be exercised. Stop it
+with Ctrl+C.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import math
 import os
 import random
 import sys
-import threading
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
@@ -25,8 +25,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from steady_net import WebSocketServer  # noqa: E402
 
 DEVICE_ID = "ST-SIM1"
-FIRMWARE = "1.0.0"
+FIRMWARE = "1.1.0"
 RATE_HZ = 50
+
+
+def noise(scale: float) -> float:
+    return (random.random() - 0.5) * scale
 
 
 def main() -> None:
@@ -34,6 +38,7 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--fall-every", type=float, default=12.0, help="seconds between simulated falls")
+    parser.add_argument("--ack-every", type=float, default=0.0, help="seconds between OK/tap events (0 = once, at 20 s)")
     args = parser.parse_args()
 
     def hello(send) -> None:
@@ -50,6 +55,8 @@ def main() -> None:
             return
         if isinstance(payload, dict) and payload.get("type") == "identify":
             print("[sim] identify: LED blink requested")
+        elif isinstance(payload, dict) and payload.get("type") == "survey":
+            print("[sim] survey requested from the dashboard")
 
     server = WebSocketServer(
         args.host, args.port, on_message=message, on_connect=hello, on_disconnect=bye
@@ -59,6 +66,14 @@ def main() -> None:
     started = time.time()
     next_sample = started
     next_fall = started + args.fall_every
+    next_ack = started + 20.0
+    ack_gap = args.ack_every or 18.0
+    ack_index = 0
+    next_survey = started + 35.0
+    next_location = started + 12.0
+    rooms = [("103", "1"), ("101", "1"), ("205", "2")]
+    room_index = 0
+
     try:
         while True:
             now = time.time()
@@ -66,7 +81,7 @@ def main() -> None:
                 next_sample += 1 / RATE_HZ
                 elapsed = now - started
                 turn = max(0.0, math.sin(elapsed * 0.9)) ** 3
-                noise = lambda scale: (random.random() - 0.5) * scale  # noqa: E731
+
                 server.broadcast(
                     json.dumps(
                         {
@@ -86,6 +101,39 @@ def main() -> None:
                 next_fall = now + args.fall_every
                 server.broadcast(json.dumps({"type": "fall", "t": int((now - started) * 1000), "peak": 3.4}))
                 print("[sim] fall")
+            if now >= next_ack:
+                next_ack = now + ack_gap
+                if ack_index % 2 == 0:
+                    server.broadcast(json.dumps({"type": "ok", "t": int((now - started) * 1000)}))
+                    print("[sim] I'm OK")
+                else:
+                    tag = f"04A2339C{ack_index:02X}80"
+                    server.broadcast(
+                        json.dumps({"type": "tap", "t": int((now - started) * 1000), "tag": tag})
+                    )
+                    print(f"[sim] responder tap {tag}")
+                ack_index += 1
+            if now >= next_survey:
+                next_survey = now + 60.0
+                label = rooms[room_index % len(rooms)]
+                server.broadcast(
+                    json.dumps(
+                        {
+                            "type": "survey",
+                            "scans": 5,
+                            "accessPoints": 7 + room_index,
+                            "takenAt": int(now * 1000),
+                        }
+                    )
+                )
+                room_index += 1
+                print(f"[sim] survey captured near room {label[0]}")
+            if now >= next_location:
+                next_location = now + 25.0
+                room, floor = rooms[room_index % len(rooms)]
+                server.broadcast(
+                    json.dumps({"type": "location", "room": room, "floor": floor, "confidence": 82})
+                )
             time.sleep(0.005)
     except KeyboardInterrupt:
         print("\n[sim] stopping")
