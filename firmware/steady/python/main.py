@@ -30,7 +30,7 @@ HEARTBEAT_PERIOD_S = 60.0
 
 def load_config() -> dict:
     config = {
-        "endpoint": "http://127.0.0.1:8787/api/v1/ingest",
+        "endpoint": "http://127.0.0.1:8788/api/v1/ingest",
         "device_id": "steady-001",
         "token": "",
         "spool_dir": os.path.join(HERE, "data", "spool"),

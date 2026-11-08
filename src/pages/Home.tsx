@@ -33,7 +33,7 @@ function DashboardPreview() {
     >
       <div className="flex items-baseline justify-between px-3 pt-2 pb-3">
         <p className="text-sm text-fg">
-          Overview <span className="text-fg-3">· {shift.wing}</span>
+          Alerts <span className="text-fg-3">· {shift.wing}</span>
         </p>
         <p className="font-mono text-xs tabular-nums text-fg-3">02:14</p>
       </div>
@@ -64,7 +64,7 @@ export function Home() {
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
-              to="/overview"
+              to="/alerts"
               className="inline-flex h-11 items-center rounded-lg bg-fg px-5 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98]"
             >
               Open the dashboard

@@ -11,7 +11,7 @@ Python program on the QRB2210 (Wi-Fi uplink).
 3. Wire the MPU6050 (see the table below), power the board over USB-C.
 4. `cp python/config.example.json python/config.json` and edit:
    * `endpoint` — full URL of the site's ingest route,
-     e.g. `http://192.168.1.10:8787/api/v1/ingest` (or your deployed worker).
+     e.g. `http://192.168.1.10:8788/api/v1/ingest` (or your deployed worker).
    * `token` — the site's `DEVICE_TOKEN`.
    * `device_id` — unique per resident/device, `A-Z a-z 0-9 . _ -`.
 5. Press **Run**. The console shows the sketch output plus the Python log.

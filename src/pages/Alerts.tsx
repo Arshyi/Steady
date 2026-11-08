@@ -3,6 +3,35 @@ import { AlertRow } from '../components/board'
 import { Page, PageHeader } from '../components/PageHeader'
 import { useLive } from '../live'
 import type { Alert } from '../data/alerts'
+import { countByStatus, LOW_BATTERY } from '../data/residents'
+
+/** One-line counts for the whole wing: residents first, then devices */
+function WingSummary() {
+  const { residents } = useLive()
+  const c = countByStatus(residents)
+  const online = residents.filter((r) => r.device?.lastSyncSec != null && r.device.lastSyncSec < 120).length
+  const lowBattery = residents.filter((r) => (r.device?.battery ?? 100) < LOW_BATTERY).length
+  const weakSignal = residents.filter((r) => r.device?.signal === 'weak').length
+
+  return (
+    <div className="mt-4 flex flex-col gap-1 text-sm tabular-nums text-fg-2">
+      <p>
+        {residents.length} residents · {c.asleep} asleep · {c.up} up ·{' '}
+        <span className={c.check ? 'text-check' : ''}>
+          {c.check} {c.check === 1 ? 'needs' : 'need'} a check
+        </span>{' '}
+        ·{' '}
+        <span className={c.fall ? 'text-fall' : ''}>
+          {c.fall} {c.fall === 1 ? 'fall' : 'falls'}
+        </span>
+        {c.offline > 0 && <> · {c.offline} with no data</>}
+      </p>
+      <p>
+        {online} {online === 1 ? 'device' : 'devices'} online · {lowBattery} low battery · {weakSignal} weak signal
+      </p>
+    </div>
+  )
+}
 
 type Filter = 'all' | 'fall' | 'check' | 'device'
 
@@ -33,7 +62,9 @@ export function Alerts() {
 
   return (
     <Page>
-      <PageHeader title="Alerts" />
+      <PageHeader title="Alerts">
+        <WingSummary />
+      </PageHeader>
 
       <div role="tablist" className="mt-8 inline-flex rounded-lg border border-line bg-deep p-1">
         {filters.map((f) => {

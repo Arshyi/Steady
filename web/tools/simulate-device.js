@@ -3,7 +3,7 @@
  * Posts realistic Steady traffic to a running dashboard, so the site can be
  * developed and demonstrated without a board.
  *
- *   node tools/simulate-device.js --url http://127.0.0.1:8787 \
+ *   node tools/simulate-device.js --url http://127.0.0.1:8788 \
  *     --token dev-token --device steady-001 --minutes 30 --fall
  *
  * It backfills 10 Hz telemetry (matching what the firmware publishes), then
@@ -22,7 +22,7 @@ const arg = (name, fallback) => {
   return value;
 };
 
-const baseUrl = String(arg("url", "http://127.0.0.1:8787")).replace(/\/$/, "");
+const baseUrl = String(arg("url", "http://127.0.0.1:8788")).replace(/\/$/, "");
 const token = String(arg("token", process.env.STEADY_TOKEN || "dev-token"));
 const device = String(arg("device", "steady-001"));
 const minutes = Number(arg("minutes", 30));
