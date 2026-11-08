@@ -102,4 +102,15 @@ export interface Backend {
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>
   addResident(name: string, room: string | null): Promise<{ id: string; name: string; room: string }>
+  /** Demo tools: what live mode holds right now */
+  liveCounts(): Promise<LiveCounts>
+  /** Demo tools: remove staff-added residents, pairings and live alerts (and live readings if asked) */
+  resetLive(options: { readings: boolean }): Promise<LiveCounts>
+}
+
+export interface LiveCounts {
+  residents: number
+  pairings: number
+  alerts: number
+  readings: number
 }

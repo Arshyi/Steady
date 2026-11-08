@@ -10,6 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { listSeen, touchDevice } from './devices.ts'
 import { residentSeeds, type ResidentSeed } from './residents.ts'
 import type {
+  LiveCounts,
   AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status, Urgency,
 } from './types.ts'
 
@@ -595,6 +596,28 @@ export function listDevices(): DeviceInfo[] {
     if (row) paired.set(pairing.deviceId, { residentId, name: row.name, room: row.room })
   }
   return listSeen().map((d) => ({ ...d, pairedTo: paired.get(d.id) ?? null }))
+}
+
+// ---------- Demo tools ----------
+
+export async function liveCounts(): Promise<LiveCounts> {
+  return {
+    residents: addedResidents.length,
+    pairings: pairings.size,
+    alerts: alerts.filter((a) => a.source === 'device').length,
+    readings: readings.filter((r) => r.source === 'device').length,
+  }
+}
+
+export async function resetLive({ readings: clearReadings }: { readings: boolean }): Promise<LiveCounts> {
+  const before = await liveCounts()
+  pairings.clear()
+  addedResidents = []
+  alerts = alerts.filter((a) => a.source !== 'device')
+  if (clearReadings) readings = readings.filter((r) => r.source !== 'device')
+  await save()
+  refreshSoon()
+  return { ...before, readings: clearReadings ? before.readings : 0 }
 }
 
 /** A resident added from Settings, to pair a real wearable to */

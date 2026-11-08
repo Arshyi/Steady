@@ -26,6 +26,10 @@
 // and the demo fall are admin only. Device routes (readings, falls, acks, ingest) don't use
 // staff logins; the firmware has its own token.
 //
+//   GET  /api/demo/status           demo page, this computer only: what a reset would remove
+//   POST /api/demo/reset-live       { readings? } staff-added residents, pairings, live alerts
+//   POST /api/demo/reset-accounts   delete every Auth0 login
+//
 //   GET  /api/v1/health             liveness; says which store is in use
 //   POST /api/v1/ingest             the firmware's batched uplink (bearer token)
 //
@@ -35,12 +39,12 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { configured } from './databricks.ts'
-import { touchDevice } from './devices.ts'
+import { touchDevice, forgetDevices } from './devices.ts'
 import { addSamples, recentSamples } from './live.ts'
 import type { Backend, DeviceReading } from './types.ts'
 import {
   HttpError, authEnabled, accountsEnabled, currentStaff, requireAdmin, registerCareHome,
-  listStaff, inviteStaff, setRole, removeStaff, resendInvite,
+  listStaff, inviteStaff, setRole, removeStaff, resendInvite, listAccounts, deleteAllAccounts,
 } from './auth.ts'
 
 const PORT = Number(process.env.PORT) || 8787
@@ -158,6 +162,34 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
   try {
+    // ---------- demo tools (this computer only) ----------
+    // Wipe live devices or every login so pairing and sign-up can be demonstrated again.
+    // Only from this machine: the Vite proxy and the browser here are loopback, a board or
+    // a phone on the Wi-Fi is not. The custom header stops other websites posting here.
+    if (path.startsWith('/api/demo/')) {
+      const from = req.socket.remoteAddress ?? ''
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(from))
+        return send(res, 403, { error: 'Demo tools only work on the computer running the server' })
+      if (req.method === 'GET' && path === '/api/demo/status') {
+        return send(res, 200, {
+          live: await backend.liveCounts(),
+          accounts: authEnabled ? await listAccounts() : null,
+          mode: backend.getState().mode,
+        })
+      }
+      if (req.method !== 'POST' || req.headers['x-steady-demo'] !== 'reset')
+        return send(res, 400, { error: 'Send a POST with the x-steady-demo: reset header' })
+      if (path === '/api/demo/reset-live') {
+        const { readings } = await readJson(req)
+        const removed = await backend.resetLive({ readings: readings === true })
+        forgetDevices()
+        console.log('[demo] live devices reset', removed)
+        return send(res, 200, { removed })
+      }
+      if (path === '/api/demo/reset-accounts') return send(res, 200, await deleteAllAccounts())
+      return send(res, 404, { error: 'Not found' })
+    }
+
     // ---------- accounts ----------
 
     if (req.method === 'GET' && path === '/api/accounts') return send(res, 200, { login: authEnabled, register: accountsEnabled })
