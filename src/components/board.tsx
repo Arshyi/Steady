@@ -1,7 +1,8 @@
 import { Link } from 'react-router'
 import type { Resident, ResidentStatus } from '../data/residents'
-import { minutesAgo, findResident, LOW_BATTERY } from '../data/residents'
+import { minutesAgo, clock, LOW_BATTERY } from '../data/residents'
 import { kindLabel, type Alert } from '../data/alerts'
+import { useLive } from '../live'
 
 /** Room number as a small door plate. Used wherever a room appears. */
 export function RoomPlate({ room }: { room: string }) {
@@ -17,6 +18,7 @@ const statusLabel: Record<ResidentStatus, string> = {
   check: 'Needs a check',
   up: 'Up',
   asleep: 'Asleep',
+  offline: 'No data',
 }
 
 const dotClass = {
@@ -24,6 +26,7 @@ const dotClass = {
   check: 'bg-check',
   up: 'border border-fg-2',
   asleep: 'bg-fg-3/40',
+  offline: 'border border-dashed border-fg-3',
   battery: 'bg-fg-3',
   signal: 'bg-fg-3',
 }
@@ -38,6 +41,7 @@ export function StatusMark({ status }: { status: ResidentStatus }) {
     check: 'text-check font-medium',
     up: 'text-fg',
     asleep: 'text-fg-2',
+    offline: 'text-fg-3',
   }[status]
 
   return (
@@ -48,10 +52,9 @@ export function StatusMark({ status }: { status: ResidentStatus }) {
   )
 }
 
-export function BatteryText({ value }: { value: number }) {
-  return (
-    <span className={`font-mono tabular-nums ${value < LOW_BATTERY ? 'text-check' : ''}`}>{value}%</span>
-  )
+export function BatteryText({ value }: { value: number | null | undefined }) {
+  if (value === null || value === undefined) return <span className="font-mono text-fg-3">–</span>
+  return <span className={`font-mono tabular-nums ${value < LOW_BATTERY ? 'text-check' : ''}`}>{value}%</span>
 }
 
 function alertTitle(alert: Alert, name: string) {
@@ -70,9 +73,18 @@ function alertTitle(alert: Alert, name: string) {
 const buttonBase =
   'h-10 shrink-0 rounded-lg px-4 text-sm font-medium transition-[opacity,background-color,transform] duration-150 ease-out active:scale-[0.98]'
 
+interface AlertRowProps {
+  alert: Alert
+  /** Pass a resident to skip the live lookup (used by the landing page preview) */
+  resident?: Resident
+  onHandle: () => void
+  onUndo: () => void
+}
+
 /** One alert. Falls get the only strong color in the app. */
-export function AlertRow({ alert, onHandle, onUndo }: { alert: Alert; onHandle: () => void; onUndo: () => void }) {
-  const resident = findResident(alert.residentId)
+export function AlertRow({ alert, resident: given, onHandle, onUndo }: AlertRowProps) {
+  const { findResident } = useLive()
+  const resident = given ?? findResident(alert.residentId)
   if (!resident) return null
 
   if (alert.handledAt) {
@@ -83,8 +95,8 @@ export function AlertRow({ alert, onHandle, onUndo }: { alert: Alert; onHandle: 
           <Link to={`/residents/${resident.id}`} className="text-fg hover:underline">
             {resident.name}
           </Link>{' '}
-          · {kindLabel[alert.kind].toLowerCase()} at <span className="font-mono tabular-nums">{alert.time}</span>,
-          handled at <span className="font-mono tabular-nums">{alert.handledAt}</span>
+          · {kindLabel[alert.kind].toLowerCase()} at <span className="font-mono tabular-nums">{clock(alert.raisedAt)}</span>,
+          handled at <span className="font-mono tabular-nums">{clock(alert.handledAt)}</span>
         </p>
         <button onClick={onUndo} className="text-sm text-fg-2 transition-colors duration-150 hover:text-fg">
           Undo
@@ -110,8 +122,8 @@ export function AlertRow({ alert, onHandle, onUndo }: { alert: Alert; onHandle: 
           </Link>
         </p>
         <p className="mt-1 pl-4 text-sm text-fg-2">
-          <span className="font-mono tabular-nums">{alert.time}</span> · {alert.detail}
-          {isFall && (
+          <span className="font-mono tabular-nums">{clock(alert.raisedAt)}</span> · {alert.detail}
+          {isFall && resident.heartRate !== null && (
             <>
               {' '}
               · heart rate <span className="font-mono tabular-nums">{resident.heartRate}</span> bpm
@@ -168,7 +180,9 @@ export function ResidentList({ residents, compact }: { residents: Resident[]; co
                 <StatusMark status={r.status} />
               </span>
               <span className={`${movementCol} text-sm text-fg-2`}>{minutesAgo(r.lastMovementMin)}</span>
-              <span className="text-right font-mono text-sm tabular-nums text-fg-2">{r.heartRate} bpm</span>
+              <span className="text-right font-mono text-sm tabular-nums text-fg-2">
+                {r.heartRate === null ? '–' : `${r.heartRate} bpm`}
+              </span>
             </Link>
           </li>
         ))}

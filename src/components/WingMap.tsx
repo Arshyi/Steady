@@ -1,6 +1,6 @@
 import { Link } from 'react-router'
 import { BatteryLow } from 'lucide-react'
-import { residents, byRoom, LOW_BATTERY, type Resident } from '../data/residents'
+import { byRoom, LOW_BATTERY, type Resident } from '../data/residents'
 import { RoomPlate, StatusMark } from './board'
 
 function RoomTile({ r, side }: { r: Resident; side: 'north' | 'south' }) {
@@ -10,6 +10,7 @@ function RoomTile({ r, side }: { r: Resident; side: 'north' | 'south' }) {
       : r.status === 'check'
         ? 'border-check/40 bg-card'
         : 'border-line bg-card'
+  const battery = r.device?.battery
 
   return (
     <Link
@@ -20,7 +21,7 @@ function RoomTile({ r, side }: { r: Resident; side: 'north' | 'south' }) {
     >
       <div className="flex items-center justify-between gap-2">
         <RoomPlate room={r.room} />
-        {r.device.battery < LOW_BATTERY && (
+        {battery !== null && battery !== undefined && battery < LOW_BATTERY && (
           <BatteryLow className="h-4 w-4 text-check" strokeWidth={1.5} aria-label="Device battery low" />
         )}
       </div>
@@ -35,7 +36,7 @@ function RoomTile({ r, side }: { r: Resident; side: 'north' | 'south' }) {
 }
 
 /** The wing as it's laid out: rooms on both sides of the corridor, nurses' station at the end */
-export function WingMap() {
+export function WingMap({ residents }: { residents: Resident[] }) {
   const rooms = [...residents].sort(byRoom)
   const half = Math.ceil(rooms.length / 2)
   const north = rooms.slice(0, half)

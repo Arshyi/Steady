@@ -1,17 +1,15 @@
 import { Link, NavLink, useParams } from 'react-router'
 import { ChevronLeft } from 'lucide-react'
-import {
-  residents, byRoom, findResident, minutesAgo, secondsAgo, LOW_BATTERY, movementSlots, type Resident,
-} from '../data/residents'
+import { byRoom, minutesAgo, secondsAgo, clock, LOW_BATTERY, type Resident } from '../data/residents'
 import { kindLabel } from '../data/alerts'
 import { BatteryText, Dot, RoomPlate, StatusMark } from '../components/board'
 import { MovementChart } from '../components/MovementChart'
 import { Wearable } from '../components/Wearable'
-import { useAlerts } from '../alerts'
+import { useLive } from '../live'
 
 const signalLabel = { good: 'Good', fair: 'Fair', weak: 'Weak' }
 
-function ResidentPicker({ selectedId }: { selectedId?: string }) {
+function ResidentPicker({ residents, selectedId }: { residents: Resident[]; selectedId?: string }) {
   return (
     <nav aria-label="Residents" className="overflow-hidden rounded-xl border border-line bg-card">
       <ul>
@@ -27,7 +25,7 @@ function ResidentPicker({ selectedId }: { selectedId?: string }) {
               <span className="min-w-0 flex-1 truncate text-sm text-fg">{r.name}</span>
               <Dot kind={r.status} />
               <span className="w-10 text-right text-xs text-fg-2">
-                <BatteryText value={r.device.battery} />
+                <BatteryText value={r.device?.battery} />
               </span>
             </NavLink>
           </li>
@@ -49,11 +47,12 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub: 
 }
 
 function ResidentDetail({ r }: { r: Resident }) {
-  const { alerts } = useAlerts()
+  const { alerts, slots } = useLive()
   const events = alerts.filter((a) => a.residentId === r.id)
   const d = r.device
-  const lowBattery = d.battery < LOW_BATTERY
+  const lowBattery = (d?.battery ?? 100) < LOW_BATTERY
   const light = r.status === 'fall' ? 'fall' : r.status === 'check' || lowBattery ? 'check' : 'accent'
+  const labels = slots.map(clock)
 
   return (
     <div className="min-w-0">
@@ -72,22 +71,26 @@ function ResidentDetail({ r }: { r: Resident }) {
       <div className="mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Stat
           label="Heart rate"
-          value={`${r.heartRate} bpm`}
-          sub={`${r.heartRateRange[0]}–${r.heartRateRange[1]} tonight`}
+          value={r.heartRate === null ? '–' : `${r.heartRate} bpm`}
+          sub={r.heartRateRange ? `${r.heartRateRange[0]}–${r.heartRateRange[1]} tonight` : 'No heart rate sensor'}
           tone={r.status === 'fall' ? 'fall' : undefined}
         />
-        <Stat label="Last movement" value={minutesAgo(r.lastMovementMin)} sub={`Worn since ${d.wornSince}`} />
+        <Stat
+          label="Last movement"
+          value={minutesAgo(r.lastMovementMin)}
+          sub={d?.wornSince ? `Worn since ${clock(d.wornSince)}` : 'No readings yet'}
+        />
         <Stat
           label="Battery"
-          value={`${d.battery}%`}
-          sub={lowBattery ? 'Charge on next round' : 'Lasts the shift'}
+          value={d?.battery === null || d?.battery === undefined ? '–' : `${d.battery}%`}
+          sub={!d ? 'No device paired' : d.battery === null ? 'Not reported' : lowBattery ? 'Charge on next round' : 'Lasts the shift'}
           tone={lowBattery ? 'check' : undefined}
         />
         <Stat
           label="Signal"
-          value={signalLabel[d.signal]}
-          sub={`${d.rssi} dBm`}
-          tone={d.signal === 'weak' ? 'check' : undefined}
+          value={d?.signal ? signalLabel[d.signal] : '–'}
+          sub={d?.rssi !== null && d?.rssi !== undefined ? `${d.rssi} dBm` : 'Not reported'}
+          tone={d?.signal === 'weak' ? 'check' : undefined}
         />
       </div>
 
@@ -95,29 +98,27 @@ function ResidentDetail({ r }: { r: Resident }) {
         <section className="flex flex-col rounded-xl border border-line bg-card p-5">
           <div className="mb-6 flex items-baseline justify-between gap-4">
             <h2 className="text-base font-medium">Movement tonight</h2>
-            <p className="text-xs text-fg-3">
-              Per half hour since {movementSlots[0]}
-            </p>
+            <p className="text-xs text-fg-3">Average per half hour, from the gyroscope</p>
           </div>
-          <MovementChart values={r.movement} fallInLastSlot={r.status === 'fall'} />
+          <MovementChart values={r.movement} labels={labels} fallInLastSlot={r.status === 'fall'} />
         </section>
 
         <section className="rounded-xl border border-line bg-card p-5">
           <h2 className="text-base font-medium">Device</h2>
           <div className="my-6 rounded-xl bg-deep py-6">
-            <Wearable deviceId={d.id} light={light} size={88} />
+            <Wearable deviceId={d?.id ?? 'No device'} light={light} size={88} />
           </div>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-fg-2">Device</dt>
-            <dd className="text-right font-mono tabular-nums">{d.id}</dd>
+            <dd className="text-right font-mono tabular-nums">{d?.id ?? '–'}</dd>
             <dt className="text-fg-2">Firmware</dt>
-            <dd className="text-right font-mono tabular-nums">{d.firmware}</dd>
+            <dd className="text-right font-mono tabular-nums">{d?.firmware ?? '–'}</dd>
             <dt className="text-fg-2">Battery</dt>
             <dd className="text-right">
-              <BatteryText value={d.battery} />
+              <BatteryText value={d?.battery} />
             </dd>
             <dt className="text-fg-2">Last sync</dt>
-            <dd className="text-right font-mono tabular-nums">{secondsAgo(d.lastSyncSec)}</dd>
+            <dd className="text-right font-mono tabular-nums">{secondsAgo(d?.lastSyncSec ?? null)}</dd>
           </dl>
         </section>
       </div>
@@ -128,14 +129,14 @@ function ResidentDetail({ r }: { r: Resident }) {
           <ul className="mt-4 flex flex-col">
             {events.map((a) => (
               <li key={a.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-line py-3 text-sm">
-                <span className="w-12 font-mono tabular-nums text-fg-3">{a.time}</span>
+                <span className="w-12 font-mono tabular-nums text-fg-3">{clock(a.raisedAt)}</span>
                 <span className="inline-flex items-center gap-2 text-fg">
                   <Dot kind={a.kind} />
                   {kindLabel[a.kind]}
                 </span>
                 <span className="flex-1 text-fg-2">{a.detail}</span>
                 <span className="font-mono text-xs tabular-nums text-fg-3">
-                  {a.handledAt ? `Handled ${a.handledAt}` : 'Open'}
+                  {a.handledAt ? `Handled ${clock(a.handledAt)}` : 'Open'}
                 </span>
               </li>
             ))}
@@ -150,6 +151,7 @@ function ResidentDetail({ r }: { r: Resident }) {
 
 export function Residents() {
   const { id } = useParams()
+  const { residents, findResident } = useLive()
   const selected = id ? findResident(id) : [...residents].sort(byRoom)[0]
 
   return (
@@ -157,7 +159,7 @@ export function Residents() {
       <div className="grid gap-8 lg:grid-cols-[288px_1fr]">
         <div className={id ? 'hidden lg:block' : ''}>
           <h2 className="mb-3 text-base font-medium">Residents</h2>
-          <ResidentPicker selectedId={selected?.id} />
+          <ResidentPicker residents={residents} selectedId={selected?.id} />
         </div>
         <div className={id ? '' : 'hidden lg:block'}>
           {selected ? <ResidentDetail r={selected} /> : <p className="text-sm text-fg-2">Resident not found</p>}
