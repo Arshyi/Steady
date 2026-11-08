@@ -28,6 +28,7 @@ const RESTLESS_AVG = 40
 const OFFLINE_AFTER_SEC = 120
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
+const REALERT_AFTER_MIN = 10 // after an alert is handled, wait this long before raising the same one again
 
 const SIM_EVERY_MS = 5000
 const DEMO_EVERY_MS = 3000
@@ -336,6 +337,10 @@ function refresh() {
   const hasOpen = (residentId: string, kind: AlertKind) => open.some((a) => a.residentId === residentId && a.kind === kind)
   const raise = (residentId: string, kind: AlertKind, detail: string) => {
     if (hasOpen(residentId, kind)) return
+    const handledRecently = visible.some(
+      (a) => a.residentId === residentId && a.kind === kind && a.handledAt && minutesSince(a.handledAt)! < REALERT_AFTER_MIN,
+    )
+    if (handledRecently) return
     const alert: LocalAlert = { id: randomUUID(), residentId, kind, raisedAt: iso(Date.now()), detail, handledAt: null, handledBy: null, source }
     alerts.push(alert)
     open.push(alert)
