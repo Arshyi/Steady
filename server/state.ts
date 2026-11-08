@@ -2,9 +2,14 @@
 // and keeps the result in memory so the web app can poll it cheaply.
 
 import { sql, lit, SCHEMA, type Row } from './databricks.ts'
-import { loadMode, saveMode, insertAlerts, type Mode } from './schema.ts'
-import { startSimulator, stopSimulator, setFallen, backfillIfNeeded } from './simulator.ts'
+import { loadMode, saveMode, insertAlerts, setupSchema } from './schema.ts'
+import { startSimulator, stopSimulator, setFallen, backfillIfNeeded, simulateFall } from './simulator.ts'
+import { listSeen, touchDevice } from './devices.ts'
 import { createBatchWriter } from './batch-writer.ts'
+import type { AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status } from './types.ts'
+
+export type { AlertKind, AlertView, DeviceReading, ResidentView, State, Status } from './types.ts'
+export { simulateFall }
 
 const REFRESH_MS = 4000
 const WINDOW_HOURS = 4
@@ -16,50 +21,6 @@ const RESTLESS_AVG = 40 // average movement over 20 min above this -> "needs a c
 const OFFLINE_AFTER_SEC = 120 // no reading for 2 min -> "no data"
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
-
-export type Status = 'fall' | 'check' | 'up' | 'asleep' | 'offline'
-export type AlertKind = 'fall' | 'check' | 'battery' | 'signal'
-
-export interface ResidentView {
-  id: string
-  name: string
-  room: string
-  status: Status
-  note: string | null
-  lastMovementMin: number | null
-  heartRate: number | null
-  heartRateRange: [number, number] | null
-  device: {
-    id: string
-    firmware: string | null
-    battery: number | null
-    signal: 'good' | 'fair' | 'weak' | null
-    rssi: number | null
-    lastSyncSec: number | null
-    wornSince: string | null
-  } | null
-  movement: (number | null)[]
-}
-
-export interface AlertView {
-  id: string
-  residentId: string
-  kind: AlertKind
-  raisedAt: string
-  detail: string
-  handledAt: string | null
-  /** Set when the wearable cleared it: "I'm OK button", "NFC tag 1B80" */
-  handledBy: string | null
-}
-
-export interface State {
-  mode: Mode
-  updatedAt: string | null
-  slots: string[]
-  residents: ResidentView[]
-  alerts: AlertView[]
-  error: string | null
-}
 
 let state: State = { mode: 'simulated', updatedAt: null, slots: [], residents: [], alerts: [], error: null }
 export const getState = () => state
@@ -243,6 +204,7 @@ export function refreshSoon() {
 }
 
 export async function start() {
+  await setupSchema()
   state.mode = await loadMode()
   if (state.mode === 'simulated') {
     if (await backfillIfNeeded()) console.log('[simulator] wrote tonight’s history')
@@ -275,6 +237,7 @@ export async function handleAlert(id: string, handled: boolean, by: string | nul
 
 export async function pairDevice(residentId: string, deviceId: string, firmware: string | null) {
   pairingCache.clear()
+  touchDevice(deviceId, firmware)
   // A device can only be on one resident
   await sql(`DELETE FROM ${SCHEMA}.pairings WHERE device_id = :device OR resident_id = :resident`, {
     device: deviceId,
@@ -301,17 +264,6 @@ async function residentForDevice(deviceId: string): Promise<string | null> {
   return rows[0] ? String(rows[0].resident_id) : null
 }
 
-export interface DeviceReading {
-  deviceId: string
-  ts?: string
-  movement: number
-  gyroDps?: number
-  accelG?: number
-  heartRate?: number | null
-  battery?: number | null
-  rssi?: number | null
-}
-
 // Batch across requests, but only acknowledge a reading after Databricks stores it.
 const writeReading = createBatchWriter<string>(async (rows) => {
   await sql(`INSERT INTO ${SCHEMA}.readings (ts, resident_id, device_id, source, movement, gyro_dps, accel_g, heart_rate, battery, rssi)
@@ -332,6 +284,7 @@ export async function ingestReadings(readings: DeviceReading[]) {
   for (const r of readings) {
     const residentId = await cachedResident(r.deviceId)
     if (!residentId) continue // not paired yet
+    touchDevice(r.deviceId, null)
     rows.push(
       `(${lit(r.ts ?? new Date().toISOString())}, ${lit(residentId)}, ${lit(r.deviceId)}, 'device', ${lit(r.movement)}, ${lit(r.gyroDps ?? null)}, ${lit(r.accelG ?? null)}, ${lit(r.heartRate ?? null)}, ${lit(r.battery ?? null)}, ${lit(r.rssi ?? null)})`,
     )
@@ -351,7 +304,7 @@ function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
  * Clears that resident's newest open alert and records who did it, so the
  * dashboard can say "handled via I'm OK button".
  */
-export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null) {
+export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null> {
   pairingCache.delete(deviceId)
   const residentId = await cachedResident(deviceId)
   if (!residentId) return null
@@ -369,12 +322,20 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
 }
 
 /** Fast path: a device reported a fall. Raise the alert straight away. */
-export async function reportFall(deviceId: string) {
+export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {
   pairingCache.delete(deviceId)
   const residentId = await cachedResident(deviceId)
   if (!residentId) return false
-  await insertAlerts([`(${lit(residentId)}, 'fall', current_timestamp(), 'Fall detected by the device', NULL, 'device', NULL)`])
+  await insertAlerts([`(${lit(residentId)}, 'fall', current_timestamp(), ${lit(detail)}, NULL, 'device', NULL)`])
   refreshSoon()
   return true
+}
+
+/** Every device the server has heard from, with the resident it is paired to */
+export function listDevices(): DeviceInfo[] {
+  const paired = new Map<string, DeviceInfo['pairedTo']>()
+  for (const r of state.residents)
+    if (r.device) paired.set(r.device.id, { residentId: r.id, name: r.name, room: r.room })
+  return listSeen().map((d) => ({ ...d, pairedTo: paired.get(d.id) ?? null }))
 }
 

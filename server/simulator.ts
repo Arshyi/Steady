@@ -2,7 +2,8 @@
 // Used when the data source is set to "simulated" in Settings.
 
 import { sql, lit, SCHEMA } from './databricks.ts'
-import { residentSeeds, insertAlerts } from './schema.ts'
+import { residentSeeds } from './residents.ts'
+import { insertAlerts } from './schema.ts'
 
 const HISTORY_HOURS = 4
 const LIVE_EVERY_MS = 5000

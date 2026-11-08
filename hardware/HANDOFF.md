@@ -65,3 +65,13 @@ Run the root build and relevant host tests after code changes. Record separately
 what passed on the development computer, what compiled for the board, and what
 actually ran on hardware. The fall thresholds are experimental and need
 controlled dummy/mat and everyday-activity testing, not intentional human falls.
+
+## Where the device data goes
+
+The alternative `firmware/steady/` Python uplink posts to POST /api/v1/ingest on the Steady server with an
+Authorization: Bearer <token> header and X-Device-Id. The server stores one
+reading per second, raises a fall alert from each events[] entry, and shows the
+device in Settings under "Wearables reporting in" so it can be paired to a
+resident. GET /api/v1/health is an unauthenticated liveness check for the
+device config. npm run sim:device in the repo root posts the same payloads,
+which is the quickest way to check a change before flashing an UNO Q.

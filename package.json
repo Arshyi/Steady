@@ -10,7 +10,8 @@
     "build": "tsc -b && vite build",
     "test": "node --experimental-test-module-mocks --test server/*.test.ts server/*.test.mjs",
     "preview": "vite preview",
-    "relay:mock": "node server/mock-relay.ts"
+    "relay:mock": "node server/mock-relay.ts",
+    "sim:device": "node server/device-sim.ts"
   },
   "dependencies": {
     "lucide-react": "^1.70.0",

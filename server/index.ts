@@ -1,6 +1,7 @@
 // Steady backend. Run with `npm run dev` (starts this and the web app together).
 //
 //   GET  /api/state                 everything the dashboard shows
+//   GET  /api/devices               wearables the server has heard from
 //   POST /api/mode                  { mode: 'simulated' | 'device' }
 //   POST /api/alerts/:id/handle     acknowledge or mark done
 //   POST /api/alerts/:id/undo
@@ -9,16 +10,23 @@
 //   POST /api/falls                 { deviceId }  fast path for a fall
 //   POST /api/acks                  { deviceId, kind, tag? }  the wearable's I'm OK / NFC tap
 //   POST /api/simulate/fall         { residentId }  demo: make a simulated resident fall
+//
+//   GET  /api/v1/health             liveness; says which store is in use
+//   POST /api/v1/ingest             the firmware's batched uplink (bearer token)
+//
+// The store is Databricks when DATABRICKS_HOST and DATABRICKS_WAREHOUSE_ID are
+// set, and a local file-backed store otherwise, so the whole path can be run and
+// simulated on one machine.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { setupSchema } from './schema.ts'
-import { simulateFall } from './simulator.ts'
-import {
-  start, getState, setMode, handleAlert, pairDevice, ingestReadings, reportFall, acknowledgeDevice, refreshSoon,
-  type DeviceReading,
-} from './state.ts'
+import { configured } from './databricks.ts'
+import { touchDevice } from './devices.ts'
+import type { Backend, DeviceReading } from './types.ts'
 
-const PORT = Number(process.env.PORT ?? 8787)
+const PORT = Number(process.env.PORT) || 8787
+const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? ''
+
+const backend: Backend = configured ? await import('./state.ts') : await import('./local.ts')
 
 function send(res: ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
@@ -32,59 +40,185 @@ async function readJson(req: IncomingMessage): Promise<any> {
   return text ? JSON.parse(text) : {}
 }
 
+// ---------- device uplink ----------
+
+let warnedOpen = false
+
+/**
+ * The firmware sends `Authorization: Bearer <token>` from its config. With no
+ * DEVICE_TOKEN set the endpoint stays open, which is what makes local demos
+ * work out of the box; set one before exposing the server.
+ */
+function deviceAuthorised(req: IncomingMessage, url: URL) {
+  if (!DEVICE_TOKEN) {
+    if (!warnedOpen) {
+      console.warn('[server] DEVICE_TOKEN is not set: /api/v1/ingest accepts anyone')
+      warnedOpen = true
+    }
+    return true
+  }
+  const header = String(req.headers.authorization ?? '')
+  const bearer = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+  return bearer === DEVICE_TOKEN || url.searchParams.get('token') === DEVICE_TOKEN
+}
+
+interface FirmwareSample {
+  ts?: number
+  ax?: number
+  ay?: number
+  az?: number
+  gx?: number
+  gy?: number
+  gz?: number
+  svm?: number
+}
+
+interface FirmwareEvent {
+  peak_g?: number
+  tilt_delta?: number
+  confidence?: number
+}
+
+/**
+ * The device samples at 10-200 Hz; the dashboard wants one row per second. This
+ * folds a batch into seconds of movement, gyro and acceleration.
+ */
+function summariseSamples(deviceId: string, samples: FirmwareSample[], body: any): DeviceReading[] {
+  const buckets = new Map<number, FirmwareSample[]>()
+  for (const s of samples) {
+    if (!s || typeof s !== 'object') continue
+    const ms = Number(s.ts)
+    const second = Number.isFinite(ms) ? Math.floor(ms / 1000) : Math.floor(Date.now() / 1000)
+    const list = buckets.get(second)
+    if (list) list.push(s)
+    else buckets.set(second, [s])
+  }
+
+  const battery = Number.isFinite(Number(body?.battery)) ? Number(body.battery) : null
+  const rssi = Number.isFinite(Number(body?.rssi)) ? Number(body.rssi) : null
+
+  return [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([second, list]) => {
+      let gyro = 0
+      let accel = 0
+      for (const s of list) {
+        gyro += Math.hypot(Number(s.gx) || 0, Number(s.gy) || 0, Number(s.gz) || 0)
+        accel += Math.hypot(Number(s.ax) || 0, Number(s.ay) || 0, Number(s.az) || 0)
+      }
+      const gyroDps = gyro / list.length
+      const accelG = accel / list.length
+      return {
+        deviceId,
+        ts: new Date(second * 1000).toISOString(),
+        movement: Math.min(100, Math.round(gyroDps * 20) / 10),
+        gyroDps: Math.round(gyroDps * 10) / 10,
+        accelG: Math.round(accelG * 1000) / 1000,
+        battery,
+        rssi,
+      }
+    })
+}
+
+/** "Fall detected by the device: peak 6.0 g, posture change 82°" */
+function fallDetail(e: FirmwareEvent) {
+  const bits: string[] = []
+  const peak = Number(e.peak_g)
+  if (Number.isFinite(peak) && peak > 0) bits.push(`peak ${peak.toFixed(1)} g`)
+  const tilt = Number(e.tilt_delta)
+  if (Number.isFinite(tilt) && Math.abs(tilt) >= 1) bits.push(`posture change ${Math.round(tilt)}°`)
+  const confidence = Number(e.confidence)
+  if (Number.isFinite(confidence) && confidence > 0) bits.push(`${Math.round(confidence)}% confidence`)
+  return bits.length ? `Fall detected by the device: ${bits.join(', ')}` : 'Fall detected by the device'
+}
+
+// ---------- routes ----------
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
   try {
-    if (req.method === 'GET' && path === '/api/state') return send(res, 200, getState())
+    if (req.method === 'GET' && path === '/api/state') return send(res, 200, backend.getState())
+
+    if (req.method === 'GET' && path === '/api/devices') return send(res, 200, backend.listDevices())
+
+    if (req.method === 'GET' && path === '/api/v1/health') {
+      const state = backend.getState()
+      return send(res, 200, {
+        ok: true,
+        store: configured ? 'databricks' : 'local',
+        mode: state.mode,
+        devices: backend.listDevices().length,
+        time: new Date().toISOString(),
+      })
+    }
+
+    if (req.method === 'POST' && path === '/api/v1/ingest') {
+      if (!deviceAuthorised(req, url)) return send(res, 401, { error: 'Bad or missing device token' })
+      const body = await readJson(req)
+      const deviceId = String(body.device ?? req.headers['x-device-id'] ?? '')
+      if (!deviceId) return send(res, 400, { error: 'device is required' })
+      const firmware = body.firmware ? String(body.firmware) : null
+      touchDevice(deviceId, firmware)
+
+      const samples: FirmwareSample[] = Array.isArray(body.samples) ? body.samples : []
+      const events: FirmwareEvent[] = Array.isArray(body.events) ? body.events : []
+      const accepted = await backend.ingestReadings(summariseSamples(deviceId, samples, body))
+      let alerts = 0
+      for (const e of events) if (await backend.reportFall(deviceId, fallDetail(e))) alerts += 1
+      if (samples.length || events.length) backend.refreshSoon()
+
+      return send(res, 200, { ok: true, device: deviceId, samples: samples.length ? accepted : 0, events: alerts })
+    }
 
     if (req.method === 'POST' && path === '/api/mode') {
       const { mode } = await readJson(req)
       if (mode !== 'simulated' && mode !== 'device') return send(res, 400, { error: 'mode must be simulated or device' })
-      await setMode(mode)
+      await backend.setMode(mode)
       return send(res, 200, { mode })
     }
 
     const alertMatch = path.match(/^\/api\/alerts\/([\w-]+)\/(handle|undo)$/)
     if (req.method === 'POST' && alertMatch) {
       const { by } = await readJson(req)
-      await handleAlert(alertMatch[1], alertMatch[2] === 'handle', by ? String(by) : null)
+      await backend.handleAlert(alertMatch[1], alertMatch[2] === 'handle', by ? String(by) : null)
       return send(res, 200, { ok: true })
     }
 
     if (req.method === 'POST' && path === '/api/pairings') {
       const { residentId, deviceId, firmware } = await readJson(req)
       if (!residentId || !deviceId) return send(res, 400, { error: 'residentId and deviceId are required' })
-      await pairDevice(String(residentId), String(deviceId), firmware ? String(firmware) : null)
+      await backend.pairDevice(String(residentId), String(deviceId), firmware ? String(firmware) : null)
       return send(res, 200, { ok: true })
     }
 
     if (req.method === 'POST' && path === '/api/readings') {
       const body = await readJson(req)
       const list: DeviceReading[] = Array.isArray(body) ? body : [body]
-      const accepted = await ingestReadings(list.filter((r) => r && r.deviceId && Number.isFinite(r.movement)))
+      for (const r of list) if (r?.deviceId) touchDevice(String(r.deviceId), null)
+      const accepted = await backend.ingestReadings(list.filter((r) => r && r.deviceId && Number.isFinite(r.movement)))
       return send(res, 200, { accepted })
     }
 
     if (req.method === 'POST' && path === '/api/falls') {
       const { deviceId } = await readJson(req)
-      const ok = await reportFall(String(deviceId))
+      const ok = await backend.reportFall(String(deviceId))
       return send(res, ok ? 200 : 409, ok ? { ok } : { error: 'Device is not paired to a resident' })
     }
 
     if (req.method === 'POST' && path === '/api/acks') {
       const { deviceId, kind, tag } = await readJson(req)
       if (!deviceId || (kind !== 'ok' && kind !== 'nfc')) return send(res, 400, { error: 'deviceId and kind (ok or nfc) are required' })
-      const result = await acknowledgeDevice(String(deviceId), kind, tag ? String(tag) : null)
+      const result = await backend.acknowledgeDevice(String(deviceId), kind, tag ? String(tag) : null)
       if (!result) return send(res, 409, { error: 'Device is not paired to a resident' })
       return send(res, 200, result)
     }
 
     if (req.method === 'POST' && path === '/api/simulate/fall') {
-      if (getState().mode !== 'simulated') return send(res, 409, { error: 'Switch to simulated data first' })
+      if (backend.getState().mode !== 'simulated') return send(res, 409, { error: 'Switch to simulated data first' })
       const { residentId } = await readJson(req)
-      await simulateFall(String(residentId))
-      refreshSoon()
+      await backend.simulateFall(String(residentId))
+      backend.refreshSoon()
       return send(res, 200, { ok: true })
     }
 
@@ -95,13 +229,11 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, () => console.log(`[server] http://localhost:${PORT}`))
+server.listen(PORT, () => console.log(`[server] http://localhost:${PORT} (${configured ? 'Databricks' : 'local store'})`))
 
 try {
-  console.log('[server] setting up Databricks tables…')
-  await setupSchema()
-  await start()
-  console.log('[server] connected to Databricks')
+  await backend.start()
+  console.log(`[server] ready in ${backend.getState().mode} mode`)
 } catch (e) {
-  console.error('[server] Databricks setup failed:', (e as Error).message)
+  console.error('[server] start failed:', (e as Error).message)
 }

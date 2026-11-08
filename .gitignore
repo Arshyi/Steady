@@ -3,6 +3,7 @@ dist
 *.local
 .DS_Store
 server/.env
+server/.data/
 
 # Python
 __pycache__/
