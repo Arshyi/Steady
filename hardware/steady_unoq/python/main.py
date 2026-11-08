@@ -272,6 +272,12 @@ def _summarize(now: float) -> None:
             "movement": min(100.0, gyro_dps / 2),
             "gyroDps": round(gyro_dps, 2),
             "accelG": round(accel_g, 3),
+            # The raw second for the live graph on the resident's page (kept in memory only)
+            "samples": [
+                [s["t"], round(s["ax"], 3), round(s["ay"], 3), round(s["az"], 3),
+                 round(s["gx"], 1), round(s["gy"], 1), round(s["gz"], 1)]
+                for s in batch
+            ],
         },
     )
     if stored is not None and not stored.get("accepted"):

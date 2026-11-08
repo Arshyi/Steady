@@ -7,6 +7,7 @@
 //   POST /api/alerts/:id/undo
 //   POST /api/residents             { name, room? } add a resident to pair a wearable to
 //   POST /api/pairings              { residentId, deviceId, firmware? }
+//   GET  /api/live/:deviceId        the last 15 s of raw motion, for the live graph
 //   POST /api/readings              [{ deviceId, movement, gyroDps, accelG, battery, ... }]  from devices or the relay
 //   POST /api/falls                 { deviceId }  fast path for a fall
 //   POST /api/acks                  { deviceId, kind, tag? }  the wearable's I'm OK / NFC tap
@@ -35,6 +36,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { configured } from './databricks.ts'
 import { touchDevice } from './devices.ts'
+import { addSamples, recentSamples } from './live.ts'
 import type { Backend, DeviceReading } from './types.ts'
 import {
   HttpError, authEnabled, accountsEnabled, currentStaff, requireAdmin, registerCareHome,
@@ -193,6 +195,12 @@ const server = createServer(async (req, res) => {
       return send(res, 200, backend.getState())
     }
 
+    const liveMatch = path.match(/^\/api\/live\/([\w.:-]+)$/)
+    if (req.method === 'GET' && liveMatch) {
+      await currentStaff(req)
+      return send(res, 200, recentSamples(liveMatch[1]))
+    }
+
     if (req.method === 'GET' && path === '/api/devices') {
       await currentStaff(req)
       return send(res, 200, backend.listDevices())
@@ -269,6 +277,8 @@ const server = createServer(async (req, res) => {
       // showing whatever version first registered.
       for (const r of list) {
         if (r?.deviceId) touchDevice(String(r.deviceId), r.firmware ? String(r.firmware) : null)
+        // Raw samples for the live graph stay in memory; Databricks gets the summary
+        if (r?.deviceId) addSamples(String(r.deviceId), (r as { samples?: unknown }).samples)
       }
       const accepted = await backend.ingestReadings(list.filter((r) => r && r.deviceId && Number.isFinite(r.movement)))
       return send(res, 200, { accepted })

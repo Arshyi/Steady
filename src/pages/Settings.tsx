@@ -189,7 +189,9 @@ function summarize(samples: MotionSample[]) {
   const accel = samples.map((s) => Math.hypot(s.ax, s.ay, s.az))
   const mean = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length
   const gyroDps = mean(gyro)
-  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel) }
+  // The raw second too, for the live graph on the resident's page
+  const raw = samples.map((s) => [Math.round(s.t), s.ax, s.ay, s.az, s.gx, s.gy, s.gz])
+  return { movement: Math.min(100, gyroDps / 2), gyroDps, accelG: mean(accel), samples: raw }
 }
 
 function ConnectPanel() {
