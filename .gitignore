@@ -1,9 +1,20 @@
 node_modules
 dist
-*.local
 .DS_Store
-server/.env
 server/.data/
+
+# Secrets and per-machine settings. Never commit these; the *.example files show what goes in them.
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+*.local
+*.pem
+*.key
+**/config.json
+!**/config.example.json
 
 # Python
 __pycache__/

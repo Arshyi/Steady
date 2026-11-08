@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n web,server -c cyan,magenta \"vite\" \"npm:server\"",
-    "web": "vite",
+    "dev": "concurrently -k -n web,server -c cyan,magenta \"vite --port 5173 --strictPort\" \"npm:server\"",
+    "web": "vite --port 5173 --strictPort",
     "server": "node --env-file-if-exists=server/.env --watch server/index.ts",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -13,6 +13,8 @@
     "sim:device": "node server/device-sim.ts"
   },
   "dependencies": {
+    "@auth0/auth0-react": "^2.30.0",
+    "jose": "^6.2.15",
     "lucide-react": "^1.70.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
