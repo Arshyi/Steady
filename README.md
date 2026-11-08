@@ -338,7 +338,9 @@ does not isolate a user's own devices), the app is installed at
 `ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1` and then streams `M,…` lines sampled
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
-and gyroscope values.
+and gyroscope values. The button has been pressed on the real board: one press posts
+an "I'm OK" ack that cleared the resident's open fall alerts (the server records
+`handledBy: "I'm OK button"`), and three presses fire the survey gesture.
 
 Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
 board means the board itself, so uploads go nowhere). `survey_url` is separate and
@@ -379,9 +381,14 @@ about 45 seconds. A full power cycle has not been run since this was installed.
 
 ### Not yet proven
 
-Survey mode (three presses, Wi-Fi fingerprint, room match), NFC taps and the `web/`
-Worker store have not run: no reader is fitted, the button has not been pressed on
-hardware, and the Worker was not reachable from the board.
+The survey *scan* cannot work as shipped. Three presses fire the gesture and the
+relay logs `survey: scanning the room…`, then `no Wi-Fi scans came back`: the App Lab
+container has no `nmcli`, no `iw` and no `/run/dbus`, so there is nothing to query
+NetworkManager with. The gesture path is proven; the scanning needs wireless tools
+in the container or a helper on the host side.
+
+NFC taps are untested because no reader is fitted, and the `web/` Worker store was
+not reachable from the board.
 
 ## Other firmware builds
 
@@ -467,6 +474,8 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 - **Databricks has not been exercised end to end** in this workspace; the local store
   has.
 - **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
+- **Survey mode fires but cannot scan** from inside the App Lab container; see
+  [Not yet proven](#not-yet-proven).
 - **The Wi-Fi path runs, but only what was exercised is proven.** Wi-Fi join, the
   relay on `:8765`, live readings to the dashboard, server summaries and pairing have
   all run on the real board. See [Not yet proven](#not-yet-proven) for what has not.
