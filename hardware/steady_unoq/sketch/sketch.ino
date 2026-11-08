@@ -140,7 +140,7 @@ uint32_t lastTagMs = 0;
 
 // ---- Bridge functions the Linux side can call -----------------------------
 
-/** "<deviceId>;<firmware>", e.g. "ST-UNOQ1;1.2.0" */
+/** "<deviceId>;<firmware>", e.g. "ST-UNOQ1;1.2.1" */
 String steadyInfo() {
   return String(DEVICE_ID) + ";" + FIRMWARE;
 }
