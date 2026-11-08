@@ -109,6 +109,7 @@ export function setFallen(ids: Set<string>) {
 }
 
 let timer: NodeJS.Timeout | undefined
+let generation = 0
 
 async function tick() {
   const now = new Date()
@@ -122,18 +123,21 @@ async function tick() {
 
 export function startSimulator() {
   if (timer) return
+  const started = ++generation
   const loop = async () => {
+    if (started !== generation) return
     try {
       await tick()
     } catch (e) {
       console.error('[simulator]', (e as Error).message)
     }
-    timer = setTimeout(loop, LIVE_EVERY_MS)
+    if (started === generation) timer = setTimeout(loop, LIVE_EVERY_MS)
   }
   timer = setTimeout(loop, 0)
 }
 
 export function stopSimulator() {
+  generation++
   if (timer) clearTimeout(timer)
   timer = undefined
 }

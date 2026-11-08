@@ -6,6 +6,7 @@ import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
 import { connectWifi, connectSimulated, type Connection, type FallDetail, type Transport } from '../hardware/connection'
+import { createConnectionSession } from '../hardware/connection-session'
 import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
@@ -212,8 +213,14 @@ function ConnectPanel() {
   const lastSent = useRef(0)
   const modeRef = useRef(mode)
   modeRef.current = mode
-  // A board on Wi-Fi sends its own readings and falls to the server, so the browser doesn't
-  const forwardRef = useRef(true)
+  // Only a board on USB needs the browser to forward for it. A Wi-Fi board posts its own
+  // readings and falls, and a demo device must never raise real alerts.
+  const forwardRef = useRef(false)
+  const session = useRef(createConnectionSession())
+
+  useEffect(() => () => {
+    session.current.close()
+  }, [])
 
   useEffect(() => {
     if (!conn) return
@@ -225,7 +232,7 @@ function ConnectPanel() {
       setDev(devRef.current)
       setTrace([...buffer.current])
 
-      // In "Live devices" mode, send a one-second summary to Databricks through the server
+      // In "Live devices" mode, send a one-second summary to the server (USB boards only)
       const d = devRef.current
       if (forwardRef.current && modeRef.current === 'device' && d.id && lastSecond.length && now - lastSent.current >= SEND_EVERY_MS) {
         lastSent.current = now
@@ -242,6 +249,8 @@ function ConnectPanel() {
   }, [conn])
 
   const start = async (kind: Transport) => {
+    const attempt = session.current.begin()
+    const active = attempt.guard
     setError(undefined)
     setBusy(true)
     setSent({ ok: 0 })
@@ -250,19 +259,19 @@ function ConnectPanel() {
     devRef.current = { ...emptyDevice }
     setDev(devRef.current)
     const update = (patch: Partial<LiveDevice>) => (devRef.current = { ...devRef.current, ...patch })
-    forwardRef.current = kind !== 'wifi'
+    forwardRef.current = kind === 'serial'
 
     const events = {
-      onInfo: (id: string, firmware: string) => update({ id, firmware }),
-      onBattery: (battery: number) => update({ battery }),
-      onMotion: (s: MotionSample) => {
+      onInfo: active((id: string, firmware: string) => update({ id, firmware })),
+      onBattery: active((battery: number) => update({ battery })),
+      onMotion: active((s: MotionSample) => {
         buffer.current.push(s)
         const moved = Math.hypot(s.gx, s.gy, s.gz) > 30
         update({ sample: s, gyroMoved: devRef.current.gyroMoved || moved })
-      },
-      onFall: (detail?: FallDetail) => {
+      }),
+      onFall: active((detail?: FallDetail) => {
         update({ fallSeen: true })
-        // Fast path: falls go straight to the server, with what the board measured
+        // Fast path for a USB board: the fall goes straight to the server, with what the board measured
         if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
           post('/api/falls', { deviceId: devRef.current.id, detail }).catch(() => {})
         const measured = [
@@ -270,18 +279,21 @@ function ConnectPanel() {
           detail?.tiltDelta !== undefined ? `tilt ${Math.round(detail.tiltDelta)}°` : null,
         ].filter(Boolean)
         setLastEvent(measured.length ? `Fall detected · ${measured.join(', ')}` : 'Fall detected')
-      },
-      onOk: () => setLastEvent(`"I'm OK" pressed at ${stamp()}`),
-      onTap: (tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`),
-      onSurvey: (summary: { scans?: number; accessPoints?: number }) =>
-        setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`),
-      onLocation: (place: { room?: string; floor?: string; confidence?: number }) =>
+      }),
+      onOk: active(() => setLastEvent(`"I'm OK" pressed at ${stamp()}`)),
+      onTap: active((tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`)),
+      onSurvey: active((summary: { scans?: number; accessPoints?: number }) =>
+        setLastEvent(`Survey captured · ${summary.scans ?? '?'} scans, ${summary.accessPoints ?? '?'} APs`)),
+      onLocation: active((place: { room?: string; floor?: string; confidence?: number }) =>
         setLastEvent(
           `Located in room ${place.room}${place.floor ? `, floor ${place.floor}` : ''}${
             place.confidence ? ` · ${place.confidence}%` : ''
           }`,
-        ),
-      onDisconnect: () => setConn(undefined),
+        )),
+      onDisconnect: active(() => {
+        attempt.disconnected()
+        setConn(undefined)
+      }),
     }
 
     try {
@@ -292,13 +304,16 @@ function ConnectPanel() {
           // fine, just not remembered
         }
       }
-      if (kind === 'wifi') setConn(await connectWifi(address, events))
-      else if (kind === 'serial') setConn(await connectSerial(events))
-      else setConn(await connectSimulated(events))
+      const connected =
+        kind === 'wifi' ? await connectWifi(address, events)
+        : kind === 'serial' ? await connectSerial(events)
+        : await connectSimulated(events)
+      if (!await attempt.attach(connected)) return
+      setConn(connected)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (attempt.isCurrent()) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      if (attempt.isCurrent()) setBusy(false)
     }
   }
 
@@ -322,7 +337,7 @@ function ConnectPanel() {
             id="board-address"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && address && start('wifi')}
+            onKeyDown={(e) => e.key === 'Enter' && address && !busy && start('wifi')}
             placeholder="Board address, e.g. unoq.local or 192.168.1.40"
             className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 font-mono text-sm text-fg placeholder:font-sans placeholder:text-fg-3 sm:max-w-80"
           />
@@ -412,10 +427,12 @@ function ConnectPanel() {
           </p>
           <p className="mt-1 text-xs text-fg-2">
             {conn.transport === 'wifi'
-              ? 'The board sends its own readings to Databricks. This view is for checking the sensor.'
-              : mode === 'device'
-                ? sent.note ?? (sent.ok ? `Sending to Databricks · ${sent.ok} summaries sent` : 'Sending to Databricks…')
-                : 'Not sending to Databricks. Switch the data source to Live devices to send these readings.'}
+              ? 'The board relay sends readings to the server. Check Last sync below to confirm delivery.'
+              : conn.transport === 'serial'
+                ? mode === 'device'
+                  ? sent.note ?? (sent.ok ? `Sending to the server · ${sent.ok} summaries sent` : 'Sending to the server…')
+                  : 'Not sending to the server. Switch the data source to Live devices to send these readings.'
+                : 'Demo readings and falls stay in this view. Use Simulated data to test dashboard alerts.'}
           </p>
         </div>
 
@@ -452,9 +469,9 @@ function ConnectPanel() {
               ))}
             </select>
             <button
-              disabled={!residentId || !dev.id}
+              disabled={!residentId || !dev.id || conn.transport === 'simulated'}
               onClick={async () => {
-                if (!dev.id) return
+                if (!dev.id || conn.transport === 'simulated') return
                 try {
                   await pair(residentId, dev.id, dev.firmware)
                   setSent({ ok: sent.ok })
@@ -467,6 +484,9 @@ function ConnectPanel() {
               Pair
             </button>
           </div>
+          {conn.transport === 'simulated' && (
+            <p className="mt-2 text-xs text-fg-3">Demo devices cannot be paired to residents.</p>
+          )}
           {mode === 'simulated' && (
             <p className="mt-2 text-xs text-fg-3">Pairings apply to Live devices mode.</p>
           )}

@@ -1,5 +1,8 @@
 # Steady
 
+UNO Q setup, power and storage sizing: [docs/UNO_Q_SETUP.md](docs/UNO_Q_SETUP.md). Review findings and
+what remains unverified: [docs/UNO_Q_REVIEW.md](docs/UNO_Q_REVIEW.md).
+
 Steady helps nursing-home night staff watch every resident at once. A wearable
 tracks movement and detects falls, a small server stores the readings, and a web
 dashboard shows who is asleep, who is up, who needs a check, and alerts staff the
@@ -331,7 +334,10 @@ Deploy with `npx wrangler d1 create steady` (put the id in `wrangler.jsonc`), th
 ```bash
 npm run build                                   # type-checks the dashboard (tsc -b) and bundles it
 arduino-cli compile -b arduino:zephyr:unoq arduino/steady_mpu6050
+npm test                                        # server batch writer, simulator and connection-session tests
 cd web && npm test                              # Worker analysis + location tests
+python -m unittest discover -s hardware/steady_unoq/tools -p "test_*.py"   # relay and reading sender
+hardware/steady_unoq/tools/run_detector_tests.bat   # integrated sketch detector (Windows, MSVC)
 firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 ```
 
@@ -358,6 +364,17 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
   `DEVICE_TOKEN` is optional.
 - **This is health data with no retention or export policy** on the server side.
 - **Battery and signal are simulated**; the UNO Q cannot measure a battery.
+- **Readings are acknowledged after the database commit.** `/api/readings` returns
+  `accepted` only once the insert succeeded, so a sender can retain and retry on an error.
+  Requests share batches with a 3-second collection delay. The integrated relay has no
+  durable offline queue yet, and a response lost after a commit can duplicate readings
+  until events have IDs and the server de-duplicates them.
+- **Falls are not de-duplicated.** Posting the same fall twice raises two alerts.
+- **Unresolved alerts never age out;** the 12-hour window applies only to handled alerts.
+- **`arduino/steady_mpu6050` sets the accelerometer to ±2 g** while its thresholds (1.8 g
+  impact, 3.0 g "hard impact") sit at or above that range, so a hard landing clips and the
+  reported peak is capped near 2 g. `hardware/steady_unoq` uses ±8 g. The thresholds were
+  tuned at ±2 g, so retune them if the range changes.
 - **Fall detection is a threshold, not a certified detector.** It is tuned on
   drops, not on people; validate before anyone relies on it.
 - **Databricks has not been exercised end to end** in this workspace; the local

@@ -71,7 +71,11 @@ static uint32_t g_sensor_retries = 0;
 // ---------------------------------------------------------------- sensor bus
 static bool detectSensor() {
 #if STEADY_FORCE_QWIIC
+#if STEADY_ZEPHYR
+  return g_imu.begin(Wire1);  // UNO Q Qwiic bus
+#else
   return g_imu.begin(Wire);
+#endif
 #else
   if (g_imu.begin(Wire)) {
     return true;
@@ -110,18 +114,18 @@ static int buildTelemetryJson(const Telemetry& t, char* buf, size_t len) {
       static_cast<unsigned long>(t.seq));
 }
 
-static int buildFallJson(const EventPackage& pkg, char* buf, size_t len) {
-  const FallFeatures& f = pkg.features;
+static int buildFallJson(const FallFeatures& f, uint32_t seq, uint16_t count,
+                         uint16_t rate_hz, char* buf, size_t len) {
   return snprintf(
       buf, len,
       "{\"ev\":1,\"seq\":%lu,\"t\":%lu,\"dur\":%lu,\"pk\":%.2f,\"mn\":%.2f,"
       "\"tb\":%.1f,\"ta\":%.1f,\"dl\":%.1f,\"cf\":%u,\"fl\":%u,\"n\":%u,\"hz\":%u}",
-      static_cast<unsigned long>(pkg.seq),
+      static_cast<unsigned long>(seq),
       static_cast<unsigned long>(f.t_impact_ms),
       static_cast<unsigned long>(f.t_end_ms - f.t_start_ms), f.peak_g, f.min_g,
       f.tilt_before, f.tilt_after, f.tilt_delta_deg,
       static_cast<unsigned>(f.confidence), static_cast<unsigned>(f.flags),
-      static_cast<unsigned>(pkg.count), static_cast<unsigned>(pkg.rate_hz));
+      static_cast<unsigned>(count), static_cast<unsigned>(rate_hz));
 }
 
 // ------------------------------------------------------------ per-sample work
@@ -194,12 +198,10 @@ static void pumpUplink() {
   g_event_lock.unlock();
 
   if (announce) {
-    EventPackage pkg;
-    pkg.seq = pending_seq;
-    pkg.count = pending_count;
-    pkg.rate_hz = pending_rate;
-    pkg.features = pending_features;
-    const int n = buildFallJson(pkg, buf, sizeof(buf));
+    // Only serialize metadata here: EventPackage also holds a 7.2 kB waveform,
+    // which cannot fit on the uplink task's 4 kB stack.
+    const int n = buildFallJson(pending_features, pending_seq, pending_count,
+                                pending_rate, buf, sizeof(buf));
     if (n > 0 && n < static_cast<int>(sizeof(buf)) && n < 250) {
       notifyRemote("steady_fall", buf);
     } else {

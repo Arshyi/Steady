@@ -68,7 +68,7 @@ def main() -> None:
         on_disconnect=bye,
         on_command=command,
     ).start()
-    print(f"[sim] {DEVICE_ID} serving ws://{args.host}:{args.port} — Ctrl+C to stop")
+    print(f"[sim] {DEVICE_ID} serving ws://{args.host}:{server.port} — Ctrl+C to stop")
 
     started = time.time()
     next_sample = started

@@ -15,22 +15,31 @@
 // rather than on key-up: a single press cannot be reported until the code knows
 // two more are not coming.
 //
-// Wiring: MPU6050 SDA→A4, SCL→A5, VCC→3V3, GND→GND (address 0x68 with AD0 low,
+// Wiring: MPU6050 SDA→SDA/D20, SCL→SCL/D21, VCC→3V3, GND→GND (address 0x68 with AD0 low,
 // 0x69 with AD0 high — both are tried). The button sits between D2 and GND.
+// This uses Wire, not the A4/A5 pins or the Qwiic connector's Wire1 bus.
 //
 // The NFC reader (PN532, I2C, 0x24) is still optional and not fitted yet: install
-// the Adafruit PN532 library in App Lab and it is picked up automatically. With
+// the Adafruit PN532 library in App Lab and set STEADY_ENABLE_NFC to 1. With
 // no reader the sketch still builds and taps arrive as dummy data from the
 // relay (`dummy_nfc_every_s` in python/main.py) or from the simulator, so the
 // responder flow can be exercised without the hardware.
 //
-// This replaces hardware/steady_wearable (Nano 33 BLE): the UNO Q has no BLE
-// radio visible to the sketch, and no onboard IMU.
+// This replaces the Nano firmware in hardware/steady_wearable: this app uses
+// Bridge/Linux networking, and the UNO Q requires an external IMU.
 
 #include "Arduino_RouterBridge.h"
 #include <Wire.h>
+#include "fall_detector.h"
 
-#if __has_include(<Adafruit_PN532.h>)
+// Default off because no reader is fitted. PN532 polls can block for 80 ms and
+// share this sampling loop, so enabling it does NOT guarantee 50 Hz sampling.
+// Move NFC to a separate task before relying on consistent sensor timing.
+#ifndef STEADY_ENABLE_NFC
+#define STEADY_ENABLE_NFC 0
+#endif
+
+#if STEADY_ENABLE_NFC && __has_include(<Adafruit_PN532.h>)
 #include <Adafruit_PN532.h>
 #define STEADY_NFC_READY 1
 #else
@@ -56,17 +65,11 @@ static constexpr uint8_t IMU_REG_ACCEL_XOUT_H = 0x3B;
 static constexpr uint8_t IMU_REG_PWR_MGMT_1 = 0x6B;
 static constexpr uint8_t IMU_REG_WHO_AM_I = 0x75;
 static constexpr uint8_t IMU_ADDRESSES[] = {0x68, 0x69};
-static constexpr float ACCEL_LSB_PER_G = 16384.0f;   // ±2 g
 static constexpr float GYRO_LSB_PER_DPS = 65.5f;     // ±500 °/s
 
 // ---- fall detection (untuned: test with real drops before relying on it) ---
-// A fall starts with the body becoming weightless, then a hard landing.
-static constexpr float FREEFALL_G = 0.55f;      // |a| below this is "free fall"
-static constexpr uint32_t FREEFALL_MIN_MS = 100; // must last at least this long
-static constexpr uint32_t FREEFALL_MAX_MS = 900; // longer means thrown, not falling
-static constexpr float IMPACT_G = 2.6f;          // landing after a free fall
-static constexpr float IMPACT_ALONE_G = 3.5f;    // hard hit with no free fall seen
-static constexpr uint32_t REFRACTORY_MS = 3000;  // one alert per 3 s
+// Thresholds and timing live in the host-testable fall_detector.h.
+SteadyFallDetector fallDetector;
 
 // ---- button gestures ------------------------------------------------------
 // Wire the button between D2 and GND; INPUT_PULLUP means a press reads LOW.
@@ -94,11 +97,6 @@ uint8_t imuAddress = IMU_ADDRESSES[0];
 uint32_t nextImuRetry = 0;
 
 uint32_t lastSampleMs = 0;
-uint32_t lastFallMs = 0;
-
-bool weightless = false;
-uint32_t weightlessSince = 0;
-uint32_t weightlessMs = 0;
 
 // Button gesture state machine. `gestureOpen` stays true while presses are still
 // arriving; `GESTURE_GAP_MS` after the last one the gesture is decided.
@@ -178,10 +176,15 @@ bool startImu() {
     delay(100);
     if (!imuWrite(IMU_REG_PWR_MGMT_1, 0x01)) continue;
 
-    imuWrite(IMU_REG_SMPLRT_DIV, 19);   // 1 kHz base rate / 20 = 50 Hz
-    imuWrite(IMU_REG_CONFIG, 0x03);     // DLPF, ~44 Hz accelerometer bandwidth
-    imuWrite(IMU_REG_GYRO_CONFIG, 0x08);  // ±500 °/s
-    imuWrite(IMU_REG_ACCEL_CONFIG, 0x00); // ±2 g
+    if (!imuWrite(IMU_REG_SMPLRT_DIV, 19) ||  // 1 kHz / 20 = 50 Hz
+        !imuWrite(IMU_REG_CONFIG, 0x03) ||    // DLPF, ~44 Hz
+        !imuWrite(IMU_REG_GYRO_CONFIG, 0x08) ||  // ±500 °/s
+        !imuWrite(IMU_REG_ACCEL_CONFIG, STEADY_ACCEL_CONFIG)) continue; // ±8 g
+    // Do not label the sensor ready until the configured impact range reads back.
+    uint8_t accelConfig = 0;
+    if (!imuRead(IMU_REG_ACCEL_CONFIG, &accelConfig, 1) ||
+        (accelConfig & 0x18) != STEADY_ACCEL_CONFIG) continue;
+    fallDetector.resetCandidate();
 
     Monitor.print("[steady] MPU6050 online at 0x");
     Monitor.print(imuAddress, HEX);
@@ -190,7 +193,7 @@ bool startImu() {
     return true;
   }
 
-  Monitor.println("[steady] no MPU6050 on A4/A5 (0x68 or 0x69), retrying");
+  Monitor.println("[steady] no MPU6050 on SDA/D20, SCL/D21 (0x68 or 0x69), retrying");
   return false;
 }
 
@@ -198,9 +201,9 @@ bool readImu(float& ax, float& ay, float& az, float& gx, float& gy, float& gz) {
   uint8_t buf[14];
   if (!imuRead(IMU_REG_ACCEL_XOUT_H, buf, sizeof(buf))) return false;
 
-  ax = be16(&buf[0]) / ACCEL_LSB_PER_G;
-  ay = be16(&buf[2]) / ACCEL_LSB_PER_G;
-  az = be16(&buf[4]) / ACCEL_LSB_PER_G;
+  ax = be16(&buf[0]) / STEADY_ACCEL_LSB_PER_G;
+  ay = be16(&buf[2]) / STEADY_ACCEL_LSB_PER_G;
+  az = be16(&buf[4]) / STEADY_ACCEL_LSB_PER_G;
   // buf[6..7] is die temperature; not needed for fall detection
   gx = be16(&buf[8]) / GYRO_LSB_PER_DPS;
   gy = be16(&buf[10]) / GYRO_LSB_PER_DPS;
@@ -221,7 +224,7 @@ void startNfc() {
   const uint32_t version = nfc.getFirmwareVersion();
   if (!version) {
     nfcReady = false;
-    Monitor.println("[steady] PN532 not answering on A4/A5, will retry");
+    Monitor.println("[steady] PN532 not answering on SDA/D20, SCL/D21, will retry");
     return;
   }
   nfc.SAMConfig();
@@ -250,7 +253,9 @@ void publishSample(uint32_t now, float ax, float ay, float az, float gx, float g
   // link is the bottleneck, so keep it as short as it stays readable.
   char line[80];
   snprintf(line, sizeof line, "%lu,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f", (unsigned long)now, ax, ay, az, gx, gy, gz);
-  Bridge.call("steady_motion", String(line));
+  // Telemetry must not wait for the Linux callback's RPC reply. This still
+  // depends on the Bridge transport; it is not a hard real-time guarantee.
+  Bridge.notify("steady_motion", String(line));
 }
 
 /**
@@ -333,27 +338,10 @@ void pollNfc(uint32_t now) {
 }
 
 void detectFall(uint32_t now, float ax, float ay, float az) {
-  const float g = sqrtf(ax * ax + ay * ay + az * az);
-
-  if (g < FREEFALL_G) {
-    if (!weightless) {
-      weightless = true;
-      weightlessSince = now;
-    }
-    weightlessMs = now - weightlessSince;
-    if (weightlessMs > FREEFALL_MAX_MS) weightless = false;  // a throw, not a fall
-    return;
-  }
-
-  const bool landed = weightless && weightlessMs >= FREEFALL_MIN_MS && g >= IMPACT_G;
-  const bool hardHit = g >= IMPACT_ALONE_G;  // knees first, then the torso
-
-  if ((landed || hardHit) && now - lastFallMs >= REFRACTORY_MS) {
-    lastFallMs = now;
-    weightless = false;
-
+  FallEvent fall;
+  if (fallDetector.update(now, ax, ay, az, fall)) {
     char event[48];
-    snprintf(event, sizeof event, "%lu,%.2f,%lu", (unsigned long)now, g, (unsigned long)weightlessMs);
+    snprintf(event, sizeof event, "%lu,%.2f,%lu", (unsigned long)now, fall.peakG, (unsigned long)fall.freefallMs);
     Bridge.call("steady_fall", String(event));
     steadyIdentify();  // local feedback even if the network is down
   }
@@ -389,7 +377,7 @@ void loop() {
   updateButton(now);
   pollNfc(now);
 
-  if (!imuPresent && now >= nextImuRetry) {
+  if (!imuPresent && (int32_t)(now - nextImuRetry) >= 0) {
     nextImuRetry = now + 2000;
     imuPresent = startImu();
   }
@@ -407,6 +395,12 @@ void loop() {
     if (readImu(ax, ay, az, gx, gy, gz)) {
       detectFall(now, ax, ay, az);
       publishSample(now, ax, ay, az, gx, gy, gz);
+    } else {
+      // A disconnected/reset sensor needs reconfiguration before data is valid.
+      imuPresent = false;
+      nextImuRetry = now + 2000;
+      fallDetector.resetCandidate();
+      Monitor.println("[steady] MPU6050 read failed, retrying in 2 s");
     }
   }
 

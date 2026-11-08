@@ -10,6 +10,6 @@ profiles:
     libraries:
       - Arduino_RouterBridge
       # Optional: reply to an alert by tapping an NFC tag on the wearable. No
-      # reader is fitted yet, so the sketch builds without it - the NFC block is
-      # compiled out and taps come from the relay's dummy mode or the simulator.
-      - Adafruit PN532
+      # reader is fitted yet, so NFC is disabled. To opt in, add the library and
+      # set STEADY_ENABLE_NFC=1 in sketch.ino; see its sampling-timing warning.
+      # - Adafruit PN532

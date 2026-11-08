@@ -362,7 +362,8 @@ function prune() {
   const readingCutoff = Date.now() - KEEP_HOURS * 3600_000
   readings = readings.filter((r) => new Date(r.ts).getTime() >= readingCutoff)
   const alertCutoff = Date.now() - 12 * 3600_000
-  alerts = alerts.filter((a) => new Date(a.raisedAt).getTime() >= alertCutoff)
+  // Unresolved alerts stay until someone handles them; only handled history ages out
+  alerts = alerts.filter((a) => !a.handledAt || new Date(a.raisedAt).getTime() >= alertCutoff)
 }
 
 let running = false

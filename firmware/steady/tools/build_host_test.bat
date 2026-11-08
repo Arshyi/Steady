@@ -4,6 +4,9 @@ rem Avoids %ProgramFiles(x86)%, whose parentheses break cmd parsing, and any
 rem multi-line if blocks.
 setlocal enabledelayedexpansion
 set "VSPATH="
+set "STEADY_VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist "%STEADY_VSWHERE%" for /f "usebackq tokens=*" %%i in (`"%STEADY_VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"
+if defined VSPATH goto :build
 
 for %%y in (18 2026 2022 2019) do @for %%e in (Community Professional Enterprise BuildTools) do @if exist "%ProgramFiles%\Microsoft Visual Studio\%%y\%%e\VC\Auxiliary\Build\vcvars64.bat" set "VSPATH=%ProgramFiles%\Microsoft Visual Studio\%%y\%%e"
 
@@ -21,7 +24,7 @@ if errorlevel 1 goto :vcvarsfailed
 
 pushd "%~dp0\.."
 if not exist build mkdir build
-cl /nologo /EHsc /std:c++17 /W4 /I sketch tools\host_test.cpp sketch\fall_detector.cpp sketch\orientation.cpp /Fe:build\host_test.exe
+cl /nologo /EHsc /std:c++17 /W4 /I sketch /Fo:build\ tools\host_test.cpp sketch\fall_detector.cpp sketch\orientation.cpp /Fe:build\host_test.exe
 if errorlevel 1 goto :buildfailed
 build\host_test.exe
 set "RC=%ERRORLEVEL%"
