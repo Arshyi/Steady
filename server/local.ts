@@ -560,28 +560,21 @@ export async function ingestReadings(list: DeviceReading[]) {
   return accepted
 }
 
-/** Who pressed "I'm OK", in words the dashboard shows next to the alert */
-function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
-  if (kind === 'ok') return "I'm OK button"
-  return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
-}
-
-export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null> {
+export async function acknowledgeDevice(deviceId: string): Promise<AckResult | null> {
   const residentId = residentForDevice(deviceId)
   if (!residentId) return null
-  const by = ackLabel(kind, tag)
   const newest = alerts
     .filter((a) => a.residentId === residentId && a.kind === 'fall' && !a.handledAt && a.source === currentSource())
     .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))[0]
   if (newest) {
     // The wearer saying they're OK resolves the fall: it moves to Handled, "via I'm OK button"
     newest.acknowledgedAt = iso(Date.now())
-    newest.acknowledgedBy = by
+    newest.acknowledgedBy = "I'm OK button"
     newest.handledAt = newest.acknowledgedAt
-    newest.handledBy = by
+    newest.handledBy = "I'm OK button"
     refreshSoon()
   }
-  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: by }
+  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: "I'm OK button" }
 }
 
 export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {

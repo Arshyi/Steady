@@ -408,23 +408,16 @@ async function flush() {
   }
 }
 
-/** Who cleared an alert, in words the dashboard shows next to it */
-function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
-  if (kind === 'ok') return "I'm OK button"
-  return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
-}
-
 /**
- * The wearer pressed "I'm OK", or a staff member tapped an NFC tag on the device.
- * Clears that resident's newest open alert and records who did it, so the
- * dashboard can say "handled via I'm OK button".
+ * The wearer pressed "I'm OK": downgrade that resident's newest open fall and
+ * record the press, leaving the alert open for staff.
  */
-export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null> {
+export async function acknowledgeDevice(deviceId: string): Promise<AckResult | null> {
   pairingCache.delete(deviceId)
   const residentId = await cachedResident(deviceId)
   if (!residentId) return null
 
-  const by = ackLabel(kind, tag)
+  const by = "I'm OK button"
   const rows = await sql(
     `SELECT alert_id FROM ${SCHEMA}.alerts
      WHERE resident_id = :resident AND kind = 'fall' AND handled_at IS NULL
@@ -432,6 +425,7 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
     { resident: residentId },
   )
   const alertId = rows[0] ? String(rows[0].alert_id) : null
+
   if (alertId) {
     // The wearer saying they're OK resolves the fall: it moves to Handled, "via I'm OK button"
     await saveAck(alertId, new Date().toISOString(), by)

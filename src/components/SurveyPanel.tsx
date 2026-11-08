@@ -14,14 +14,14 @@ function ago(ts: number) {
   return minutes < 90 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`
 }
 
-function ackLabel(ack: AckRow) {
-  return ack.kind === 'ok' ? "I'm OK pressed" : `NFC tap ${ack.tag?.slice(-4) ?? ''}`.trim()
+function ackLabel(_ack: AckRow) {
+  return "I'm OK pressed"
 }
 
 /**
  * SURVEY MODE, from the dashboard's side: label the captures the wearable made,
- * see where the backend last placed it, and watch "I'm OK"/NFC acknowledgements
- * come in. The board does the scanning and posting, so this only reads back.
+ * see where the backend last placed it, and watch "I'm OK" presses come in. The
+ * board does the scanning and posting, so this only reads back.
  */
 export function SurveyPanel({ device, lastEvent }: { device?: string; lastEvent?: string }) {
   const [surveys, setSurveys] = useState<SurveyRow[]>([])

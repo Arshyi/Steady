@@ -68,8 +68,7 @@ export interface LocationRow {
 export interface AckRow {
   id: number
   device: string
-  kind: 'ok' | 'nfc'
-  tag: string | null
+  kind: 'ok'
   ts: number
 }
 

@@ -39,7 +39,7 @@ export interface AlertView {
   /** Set when staff resolved it on the dashboard. A device press never sets this. */
   handledAt: string | null
   handledBy: string | null
-  /** Set when the wearer pressed "I'm OK" or tapped a tag: the alert stays open. */
+  /** Set when the wearer pressed "I'm OK": the alert stays open for staff. */
   acknowledgedAt: string | null
   acknowledgedBy: string | null
   /** Falls only: no movement since the fall, not acknowledged, or acknowledged */
@@ -97,7 +97,7 @@ export interface Backend {
   pairDevice(residentId: string, deviceId: string, firmware: string | null): Promise<void>
   ingestReadings(readings: DeviceReading[]): Promise<number>
   reportFall(deviceId: string, detail?: string): Promise<boolean>
-  acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null>
+  acknowledgeDevice(deviceId: string): Promise<AckResult | null>
   listDevices(): DeviceInfo[]
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>

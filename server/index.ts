@@ -10,7 +10,7 @@
 //   GET  /api/live/:deviceId        the last 15 s of raw motion, for the live graph
 //   POST /api/readings              [{ deviceId, movement, gyroDps, accelG, battery, ... }]  from devices or the relay
 //   POST /api/falls                 { deviceId }  fast path for a fall
-//   POST /api/acks                  { deviceId, kind, tag? }  the wearable's I'm OK / NFC tap
+//   POST /api/acks                  { deviceId, kind }  the wearable's "I'm OK" press
 //   POST /api/simulate/fall         { residentId }  demo: make a simulated resident fall
 //
 //   GET  /api/accounts              public: is login / registering turned on
@@ -300,9 +300,9 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/api/acks') {
-      const { deviceId, kind, tag } = await readJson(req)
-      if (!deviceId || (kind !== 'ok' && kind !== 'nfc')) return send(res, 400, { error: 'deviceId and kind (ok or nfc) are required' })
-      const result = await backend.acknowledgeDevice(String(deviceId), kind, tag ? String(tag) : null)
+      const { deviceId, kind } = await readJson(req)
+      if (!deviceId || kind !== 'ok') return send(res, 400, { error: 'deviceId and kind (ok) are required' })
+      const result = await backend.acknowledgeDevice(String(deviceId))
       if (!result) return send(res, 409, { error: 'Device is not paired to a resident' })
       return send(res, 200, result)
     }

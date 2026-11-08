@@ -7,7 +7,6 @@ a second and hands events to this script over the Bridge:
     "12980,3.42,180"                         fall:    ms, peak_g, free_fall_ms
     "13110,1"                                I'm OK:  ms, presses
     "14002,3"                                survey:  ms, presses (three taps)
-    "14400,04:A2:33:9C:1B:80"                NFC tap: ms, tag uid
 
 This script is the board's relay. It serves the dashboard over a WebSocket using
 the same text lines as USB serial (see `src/hardware/protocol.ts`):
@@ -16,7 +15,6 @@ the same text lines as USB serial (see `src/hardware/protocol.ts`):
     M,ax,ay,az,gx,gy,gz           every sample
     F                             a fall
     O                             "I'm OK" pressed
-    T,<tag>                       a responder tapped an NFC tag
     S,<scans>,<accessPoints>      a survey capture was stored
     L,<room>,<floor>,<confidence> the survey store matched a room
 
@@ -73,10 +71,6 @@ CONFIG = {
     "survey_interval_s": 1.5,
     # Scan and match every N seconds (0 = only when a survey is taken)
     "locate_every_s": 0,
-    # NFC is not fitted yet: >0 makes the relay emit a dummy responder tap this
-    # often, so the dashboard and backend can be exercised with fake tag data.
-    "dummy_nfc_every_s": 0,
-    "dummy_nfc_tag": "04A2339C1B80",
 }
 
 
@@ -112,7 +106,6 @@ _samples: deque[str] = deque(maxlen=400)
 _falls: deque[str] = deque(maxlen=32)
 _oks: deque[str] = deque(maxlen=32)
 _surveys: deque[str] = deque(maxlen=8)
-_taps: deque[str] = deque(maxlen=32)
 
 _identify = threading.Event()
 
@@ -131,10 +124,6 @@ def _on_ok(line: str) -> None:
 
 def _on_survey(line: str) -> None:
     _surveys.append(line)
-
-
-def _on_nfc(line: str) -> None:
-    _taps.append(line)
 
 
 # ---------------------------------------------------------------------------
@@ -185,18 +174,6 @@ def _parse_ok(line: str) -> dict | None:
     if not values:
         return None
     return {"t": int(values[0])}
-
-
-def _parse_tap(line: str) -> dict | None:
-    parts = line.split(",")
-    if len(parts) != 2:
-        return None
-    try:
-        at = int(float(parts[0]))
-    except ValueError:
-        return None
-    tag = parts[1].strip().replace(":", "").upper()[:32]
-    return {"t": at, "tag": tag} if tag else None
 
 
 # ---------------------------------------------------------------------------
@@ -368,22 +345,18 @@ def _maybe_locate() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Acknowledgements ("I'm OK", NFC taps)
+# Acknowledgements ("I'm OK")
 # ---------------------------------------------------------------------------
 
 
-def _ack(kind: str, tag: str | None = None) -> None:
-    """Clear the resident's alert on the server and log the response for the dashboard."""
-    payload = {"deviceId": CONFIG["device_id"], "kind": kind}
-    if tag:
-        payload["tag"] = tag
-    cleared = _to_server("/api/acks", payload)
-    if cleared is None:
+def _ack() -> None:
+    """Tell the server the wearer pressed "I'm OK" and log it for the dashboard."""
+    payload = {"deviceId": CONFIG["device_id"], "kind": "ok"}
+    acked = _to_server("/api/acks", payload)
+    if acked is None:
         print("[steady] ack not delivered (is the server running and the device paired?)")
 
-    log = {"device": CONFIG["device_id"], "kind": kind, "ts": int(time.time() * 1000)}
-    if tag:
-        log["tag"] = tag
+    log = {"device": CONFIG["device_id"], "kind": "ok", "ts": int(time.time() * 1000)}
     _to_survey_store("/api/v1/acks", log)
 
 
@@ -411,11 +384,10 @@ def _client_message(text: str) -> None:
 
 _checked_sketch = False
 _next_locate = 0.0
-_next_dummy_tap = 0.0
 
 
 def loop() -> None:
-    global _checked_sketch, _next_locate, _next_dummy_tap
+    global _checked_sketch, _next_locate
 
     if not _checked_sketch:
         try:
@@ -455,15 +427,7 @@ def loop() -> None:
         if ok is None:
             continue
         _broadcast("O")
-        _ack("ok")
-
-    while _taps:
-        tap = _parse_tap(_taps.popleft())
-        if tap is None:
-            continue
-        _broadcast(f"T,{tap['tag']}")
-        _ack("nfc", tap["tag"])
-        print(f"[steady] responder tap {tap['tag']}")
+        _ack()
 
     while _surveys:
         _surveys.popleft()
@@ -475,12 +439,6 @@ def loop() -> None:
     if CONFIG.get("locate_every_s") and now >= _next_locate:
         _next_locate = now + float(CONFIG["locate_every_s"])
         _maybe_locate()
-
-    # Dummy NFC: no reader is fitted yet, so taps can be faked for demos
-    dummy_every = float(CONFIG.get("dummy_nfc_every_s") or 0)
-    if dummy_every > 0 and now >= _next_dummy_tap:
-        _next_dummy_tap = now + dummy_every
-        _taps.append(f"{int(now * 1000)},{CONFIG['dummy_nfc_tag']}")
 
     if _identify.is_set():
         _identify.clear()
@@ -499,7 +457,6 @@ def main() -> None:
     Bridge.provide("steady_fall", _on_fall)
     Bridge.provide("steady_ok", _on_ok)
     Bridge.provide("steady_survey", _on_survey)
-    Bridge.provide("steady_nfc", _on_nfc)
 
     _server = WebSocketServer(
         CONFIG["ws_host"],
