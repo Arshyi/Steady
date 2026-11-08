@@ -78,12 +78,9 @@ export interface DeviceInfo {
 
 export interface AckResult {
   residentId: string
-  /** The open fall this affected, if there was one */
+  /** The open fall that was downgraded, if there was one */
   alertId: string | null
-  /** "I'm OK button", or the tag a worker used to verify the visit */
   acknowledgedBy: string
-  /** True when the tap resolved the fall: a worker proved they responded */
-  handled: boolean
 }
 
 /**
@@ -98,7 +95,7 @@ export interface Backend {
   pairDevice(residentId: string, deviceId: string, firmware: string | null): Promise<void>
   ingestReadings(readings: DeviceReading[]): Promise<number>
   reportFall(deviceId: string, detail?: string): Promise<boolean>
-  acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', tag: string | null): Promise<AckResult | null>
+  acknowledgeDevice(deviceId: string): Promise<AckResult | null>
   listDevices(): DeviceInfo[]
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>

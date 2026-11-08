@@ -16,7 +16,7 @@
  *   POST /api/v1/surveys/:id/label       name a capture's room and floor
  *   POST /api/v1/locate                  match a scan against the fingerprints (device)
  *   GET  /api/v1/location?device=        where that device was last placed
- *   POST /api/v1/acks                    "I'm OK" / NFC responder tap (device)
+ *   POST /api/v1/acks                    "I'm OK" press (device)
  *   GET  /api/v1/acks?device=&limit=     acknowledgement feed
  *
  * Read endpoints require the dashboard key (x-view-key header or ?key=); the
@@ -678,19 +678,18 @@ async function createAck(request, env) {
   if (!device) return json({ error: "invalid_device_id" }, 400);
 
   const kind = String(body.kind || "").toLowerCase();
-  if (!["ok", "nfc"].includes(kind)) return json({ error: "invalid_kind", allowed: ["ok", "nfc"] }, 400);
+  if (kind !== "ok") return json({ error: "invalid_kind", allowed: ["ok"] }, 400);
 
   const ts = Math.round(num(body.ts, Date.now()));
-  const tag = body.tag ? String(body.tag).slice(0, 32) : null;
   const uid = String(body.uid || `${device}-${kind}-${ts}`).slice(0, 96);
 
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO acks (uid, device, kind, tag, ts, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    `INSERT OR IGNORE INTO acks (uid, device, kind, ts, created_at) VALUES (?1, ?2, ?3, ?4, ?5)`,
   )
-    .bind(uid, device, kind, tag, ts, Date.now())
+    .bind(uid, device, kind, ts, Date.now())
     .run();
 
-  return json({ ok: true, uid, kind, tag });
+  return json({ ok: true, uid, kind });
 }
 
 async function listAcks(env, url) {
@@ -698,7 +697,7 @@ async function listAcks(env, url) {
   const limit = clampInt(url.searchParams.get("limit"), 1, 100, 20);
 
   const { results } = await env.DB.prepare(
-    `SELECT id, device, kind, tag, ts FROM acks
+    `SELECT id, device, kind, ts FROM acks
       WHERE (?1 IS NULL OR device = ?1)
       ORDER BY ts DESC LIMIT ?2`,
   )

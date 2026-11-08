@@ -162,14 +162,14 @@ A fall stays on the Alerts page until a member of staff marks it checked. Pressi
 
 The highest tier wins even after a press: lying still matters more than pressing a
 button. Movement has to come from the device itself, so the demo fill cannot clear
-it. **Mark checked** on the dashboard, or a worker's NFC tap at the bedside, is what
+it. **Mark checked**, pressed by staff on the dashboard, is the only thing that
 removes a fall from the queue.
 
 A gesture is decided after 650 ms with no further press, so a single press reports
 shortly after you release rather than instantly. Presses are debounced for 25 ms.
 
-D4 is shared with the optional PN532 reader's reset line, so move that jumper to a
-free pin if you fit the reader.
+D4 is otherwise free, so an add-on can use it; move the button's jumper to another
+free pin if you need D4 for something else.
 
 ### Flash the sketch
 
@@ -275,7 +275,7 @@ tables on first start, runs the simulator in **Simulated** mode, serves `/api/st
 | `POST /api/pairings` `{residentId, deviceId, firmware}` | Settings, Pair |
 | `POST /api/readings` | Devices, the relay, or Settings with a device connected |
 | `POST /api/falls` `{deviceId, detail}` | Fast path for a fall |
-| `POST /api/acks` `{deviceId, kind, tag}` | "I'm OK" press, and a worker's NFC tag tap that resolves the visit |
+| `POST /api/acks` `{deviceId, kind}` | "I'm OK" button |
 | `POST /api/simulate/fall` `{residentId}` | Settings, demo a fall |
 
 Batched ingest folds 10–200 Hz samples into one reading per second, and each event
@@ -318,7 +318,6 @@ Device to app:
 | `M,ax,ay,az,gx,gy,gz` | one sample: accel in g, gyro in °/s |
 | `F,peak,tilt,confidence` | fall confirmed by the board (`F` alone is also valid) |
 | `O` | the wearer pressed the button once: "I'm OK" |
-| `T,04A2339C1B80` | a worker tapped the tag to verify they responded; the alert is marked handled |
 | `S,5,9` | a survey capture was stored (scans, access points) |
 | `L,103,1,82` | the survey store placed the device in room 103, floor 1, 82% sure |
 
@@ -330,12 +329,9 @@ the device, `S` captures the current room.
 `hardware/steady_unoq/` runs the wearable without USB. The STM32 sketch reads the
 MPU6050 and detects falls; the Debian side (`python/main.py`) serves the protocol
 over `ws://0.0.0.0:8765` and posts a one-second summary to `/api/readings`, falls to
-`/api/falls`, and "I'm OK" presses and NFC visit checks to `/api/acks`. It also runs
-survey mode: three button presses scan Wi-Fi and post fingerprints to the Worker, and
-later scans are matched to a room and stored as a location. A button across D2 and D4
-and an optional PN532 on the same I2C bus are supported; no reader is fitted yet, so
-tag taps are dummy unless `dummy_nfc_every_s` is set. A tap is the worker's proof of
-a visit: it marks the resident's open fall handled.
+`/api/falls`, and "I'm OK" presses to `/api/acks`. It also runs survey mode: three
+button presses scan Wi-Fi and post fingerprints to the Worker, and later scans are
+matched to a room and stored as a location. A button across D2 and D4 is supported.
 
 Simulate it without a board:
 
@@ -402,9 +398,7 @@ container has no `nmcli`, no `iw` and no `/run/dbus`, so there is nothing to que
 NetworkManager with. The gesture path is proven; the scanning needs wireless tools
 in the container or a helper on the host side.
 
-NFC taps are untested with a real reader because none is fitted, but the tap path is
-exercised with dummy taps and marks the fall handled. The `web/` Worker store was not
-reachable from the board.
+The `web/` Worker store was not reachable from the board.
 
 ## Other firmware builds
 
@@ -471,10 +465,9 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 | `Connect Arduino (USB)` is disabled | The browser has no Web Serial. Use Chrome or Edge on desktop |
 | Nothing reaches the dashboard | The data source must be **Live devices** and the device paired |
 | Board joins Wi-Fi but nothing connects | A captive portal or client isolation. `curl http://captive.apple.com/hotspot-detect.html` on the board returns the portal page; use a network where your own devices see each other |
-| `invalid library reference: Adafruit PN532 ()` | `sketch/sketch.yaml` lists a library that is not installed on the board. The NFC reader is optional: leave the entry out and the sketch compiles the NFC block out |
 | `cannot unmarshal string into Go struct field AppDescriptor.Ports of type int` | `ports:` in `app.yaml` wants bare integers (`- 8765`), not `"8765:8765"` |
 | Relay logs `skipping`/no `M,…` lines, `ss -ltn` has no 8765 | Either `ports:` is missing from `app.yaml` or the sketch found no IMU. `docker logs steady_unoq-main-1` shows which |
-| Button does nothing | It must straddle D2 and D4, and D4 must not be driven by another device (the optional PN532 reset). Check nothing else is wired to D4 |
+| Button does nothing | It must straddle D2 and D4, and nothing else may be wired to D4. Check the jumper seating and that the pin is not shorted |
 | Readings arrive but the server ignores them | `pair ST-UNOQ1 to a resident` — pair it in Settings → "Wearables reporting in" |
 
 ## Known limitations

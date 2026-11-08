@@ -75,13 +75,12 @@ CREATE TABLE IF NOT EXISTS fingerprints (
 CREATE INDEX IF NOT EXISTS idx_fingerprints_survey ON fingerprints(survey_id);
 CREATE INDEX IF NOT EXISTS idx_fingerprints_room ON fingerprints(room, bssid);
 
--- "I'm OK" presses and NFC responder taps.
+-- "I'm OK" presses.
 CREATE TABLE IF NOT EXISTS acks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   uid TEXT NOT NULL UNIQUE,
   device TEXT NOT NULL,
   kind TEXT NOT NULL,
-  tag TEXT,
   ts INTEGER NOT NULL,
   created_at INTEGER
 );

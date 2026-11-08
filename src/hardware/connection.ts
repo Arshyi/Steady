@@ -34,8 +34,6 @@ export interface DeviceEvents {
   onDisconnect: () => void
   /** The wearer pressed the button once: "I'm OK". */
   onOk?: () => void
-  /** A worker tapped the tag to confirm they responded: the server marks the alert handled. */
-  onTap?: (tag: string) => void
   /** The board finished a survey capture (three presses). */
   onSurvey?: (summary: SurveySummary) => void
   /** The backend placed the device in a room after a scan. */
@@ -74,9 +72,6 @@ export function handleLine(line: string, ev: DeviceEvents) {
     }
     case 'O':
       ev.onOk?.()
-      break
-    case 'T':
-      if (parts[1]) ev.onTap?.(parts[1].trim())
       break
     case 'S':
       ev.onSurvey?.({ scans: Number(parts[1]) || undefined, accessPoints: Number(parts[2]) || undefined })
@@ -160,9 +155,8 @@ export async function connectSimulated(ev: DeviceEvents): Promise<Connection> {
   // Simulated fall after 8 seconds so the fall check can pass
   const fallTimer = setTimeout(ev.onFall, 8000)
 
-  // The button, the NFC tap (standing in for a tag until readers are fitted) and a survey
+  // The button and a survey
   const okTimer = setInterval(() => ev.onOk?.(), 21_000)
-  const tapTimer = setInterval(() => ev.onTap?.('04A2339C1B80'), 27_000)
   const surveyTimer = setInterval(() => ev.onSurvey?.({ scans: 5, accessPoints: 8 }), 41_000)
   const locationTimer = setInterval(() => ev.onLocation?.({ room: '103', floor: '1', confidence: 82 }), 13_000)
 
@@ -173,8 +167,7 @@ export async function connectSimulated(ev: DeviceEvents): Promise<Connection> {
       clearInterval(timer)
       clearTimeout(fallTimer)
       clearInterval(okTimer)
-      clearInterval(tapTimer)
-      clearInterval(surveyTimer)
+        clearInterval(surveyTimer)
       clearInterval(locationTimer)
       ev.onDisconnect()
     },
