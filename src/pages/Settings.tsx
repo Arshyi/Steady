@@ -79,7 +79,7 @@ function DataSource() {
     try {
       await simulateFall(fallFor)
       const r = residents.find((x) => x.id === fallFor)
-      setMessage(`Fall sent for ${r?.name ?? 'resident'}. It shows on Overview within a few seconds.`)
+      setMessage(`Fall sent for ${r?.name ?? 'resident'}. It shows on Alerts within a few seconds.`)
       setFallFor('')
     } catch (e) {
       setMessage((e as Error).message)

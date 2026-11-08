@@ -1,12 +1,11 @@
 import { useState } from 'react'
 import { NavLink, Link, Outlet, useLocation } from 'react-router'
-import { LayoutList, Bell, Users, Settings, Menu, X, Moon, Sun } from 'lucide-react'
+import { Bell, Users, Settings, Menu, X, Moon, Sun } from 'lucide-react'
 import { Logo } from './Logo'
 import { useTheme } from '../theme'
 import { useLive } from '../live'
 
 const links = [
-  { to: '/overview', label: 'Overview', icon: LayoutList },
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/residents', label: 'Residents', icon: Users },
   { to: '/settings', label: 'Settings', icon: Settings },
