@@ -145,9 +145,25 @@ the old D2-to-GND wiring, because D4 idling low changes nothing.
 
 | Gesture | Result |
 | --- | --- |
-| One press | "I'm OK": the relay posts an ack and the dashboard shows it |
+| One press | "I'm OK": the fall drops to the lowest urgency and still needs a visit |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
+
+### How a fall is triaged
+
+A fall stays on the Alerts page until a member of staff marks it checked. Pressing
+"I'm OK" never closes it: it only moves the fall down the list.
+
+| Urgency | What happened | Badge on the row |
+| --- | --- | --- |
+| Highest | Fell, and nothing has moved since | No movement since the fall |
+| Middle | Fell, and no "I'm OK" press | Not acknowledged yet |
+| Lowest | Fell, and the wearer pressed "I'm OK" | Says they’re OK |
+
+The highest tier wins even after a press: lying still matters more than pressing a
+button. Movement has to come from the device itself, so the demo fill cannot clear
+it. **Mark checked**, pressed by staff on the dashboard, is the only thing that
+removes a fall from the queue.
 
 A gesture is decided after 650 ms with no further press, so a single press reports
 shortly after you release rather than instantly. Presses are debounced for 25 ms.
@@ -227,8 +243,8 @@ reaches the dashboard when the device is paired to a resident.
 
 ## Dashboard
 
-Pages: **Home** (the wing at a glance), **Residents**, **Alerts** (acknowledge, Done,
-Undo), **Settings** (data source, connection, self-test, pairing).
+Pages: **Home** (the wing at a glance), **Residents**, **Alerts** (sorted by urgency,
+mark checked, Undo), **Settings** (data source, connection, self-test, pairing).
 
 **Data sources** in Settings:
 
@@ -336,7 +352,9 @@ does not isolate a user's own devices), the app is installed at
 `ws://<board>:8765` answers `I,ST-UNOQ1,1.2.1` and then streams `M,…` lines sampled
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
-and gyroscope values.
+and gyroscope values. The button has been pressed on the real board: one press posts
+an "I'm OK" ack (the server records `acknowledgedBy`) that only lowers the fall's
+urgency, and three presses fire the survey gesture.
 
 Set `server_url` to the server's LAN address before installing (`127.0.0.1` on the
 board means the board itself, so uploads go nowhere). `survey_url` is separate and
@@ -377,9 +395,14 @@ about 45 seconds. A full power cycle has not been run since this was installed.
 
 ### Not yet proven
 
-Survey mode (three presses, Wi-Fi fingerprint, room match), NFC taps and the `web/`
-Worker store have not run: no reader is fitted, the button has not been pressed on
-hardware, and the Worker was not reachable from the board.
+The survey *scan* cannot work as shipped. Three presses fire the gesture and the
+relay logs `survey: scanning the room…`, then `no Wi-Fi scans came back`: the App Lab
+container has no `nmcli`, no `iw` and no `/run/dbus`, so there is nothing to query
+NetworkManager with. The gesture path is proven; the scanning needs wireless tools
+in the container or a helper on the host side.
+
+NFC taps are untested because no reader is fitted, and the `web/` Worker store was
+not reachable from the board.
 
 ## Other firmware builds
 
@@ -465,6 +488,8 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 - **Databricks has not been exercised end to end** in this workspace; the local store
   has.
 - **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
+- **Survey mode fires but cannot scan** from inside the App Lab container; see
+  [Not yet proven](#not-yet-proven).
 - **The Wi-Fi path runs, but only what was exercised is proven.** Wi-Fi join, the
   relay on `:8765`, live readings to the dashboard, server summaries and pairing have
   all run on the real board. See [Not yet proven](#not-yet-proven) for what has not.

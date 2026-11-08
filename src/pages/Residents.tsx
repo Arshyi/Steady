@@ -131,7 +131,11 @@ function ResidentDetail({ r }: { r: Resident }) {
                 </span>
                 <span className="flex-1 text-fg-2">{a.detail}</span>
                 <span className="font-mono text-xs tabular-nums text-fg-3">
-                  {a.handledAt ? `Handled ${clock(a.handledAt)}` : 'Open'}
+                  {a.handledAt
+                    ? `Handled ${clock(a.handledAt)}`
+                    : a.acknowledgedAt
+                      ? `I'm OK ${clock(a.acknowledgedAt)} · still open`
+                      : 'Open'}
                 </span>
               </li>
             ))}

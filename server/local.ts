@@ -10,7 +10,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { listSeen, touchDevice } from './devices.ts'
 import { residentSeeds } from './residents.ts'
 import type {
-  AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status,
+  AckResult, AlertKind, AlertView, DeviceInfo, DeviceReading, Mode, ResidentView, State, Status, Urgency,
 } from './types.ts'
 
 const DATA_DIR = new URL('./.data/', import.meta.url)
@@ -29,6 +29,7 @@ const OFFLINE_AFTER_SEC = 120
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
 const REALERT_AFTER_MIN = 10 // after an alert is handled, wait this long before raising the same one again
+const FALL_STILL_SEC = 45 // a fall with no movement at all for this long is the top tier
 
 const SIM_EVERY_MS = 5000
 const DEMO_EVERY_MS = 3000
@@ -52,6 +53,8 @@ interface Reading {
   heartRate: number | null
   battery: number | null
   rssi: number | null
+  /** True for the demo fill stream, which must not count as the resident moving */
+  demo?: boolean
 }
 
 interface Profile {
@@ -161,13 +164,15 @@ function seedAlerts() {
     detail,
     handledAt: handledMin === undefined ? null : ago(handledMin),
     handledBy: by ?? null,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
     source: 'simulated',
   })
   alerts.push(
     make('3', 'fall', 3, 'Sudden drop, no movement since'),
     make('2', 'check', 150, 'Up for 15 min', 143, 'Night staff'),
     make('4', 'signal', 110, 'Device stopped syncing for 4 min', 102, 'Night staff'),
-    make('7', 'check', 200, 'Restless for 25 min', 192, "I'm OK button"),
+    make('7', 'check', 200, 'Restless for 25 min', 192, 'Night staff'),
   )
 }
 
@@ -212,7 +217,8 @@ function demoTick() {
     const reading = simulated({ id: row.id, simDevice: deviceId }, now, movementAt(profiles[row.id], 0, fallen.has(row.id)), {
       fallen: fallen.has(row.id),
     })
-    readings.push({ ...reading, source: 'device' })
+    // The fill is not the resident moving: urgency must only trust real readings
+    readings.push({ ...reading, source: 'device', demo: true })
   }
 }
 
@@ -342,7 +348,10 @@ function refresh() {
       (a) => a.residentId === residentId && a.kind === kind && a.handledAt && minutesSince(a.handledAt)! < REALERT_AFTER_MIN,
     )
     if (handledRecently) return
-    const alert: LocalAlert = { id: randomUUID(), residentId, kind, raisedAt: iso(Date.now()), detail, handledAt: null, handledBy: null, source }
+    const alert: LocalAlert = {
+      id: randomUUID(), residentId, kind, raisedAt: iso(Date.now()), detail,
+      handledAt: null, handledBy: null, acknowledgedAt: null, acknowledgedBy: null, source,
+    }
     alerts.push(alert)
     open.push(alert)
   }
@@ -359,8 +368,36 @@ function refresh() {
     updatedAt: iso(Date.now()),
     slots,
     residents: views,
-    alerts: [...visible].sort((a, b) => b.raisedAt.localeCompare(a.raisedAt)),
+    alerts: [...visible].map((a) => alertView(a, Date.now())).sort((a, b) => b.raisedAt.localeCompare(a.raisedAt)),
     error: null,
+  }
+}
+
+/** Movement after the fall is what separates lying still from getting up again */
+function movedSince(a: LocalAlert, since: number): boolean {
+  return readings.some(
+    (r) =>
+      !r.demo && r.residentId === a.residentId && r.source === a.source && new Date(r.ts).getTime() > since && r.movement >= MOVING,
+  )
+}
+
+/**
+ * Falls never close on their own. The tier only says how fast someone should go:
+ * nobody moving since the fall outranks "hasn't pressed I'm OK", which outranks
+ * "pressed I'm OK". All three still expect a member of staff to check.
+ */
+function urgencyOf(a: LocalAlert, now: number): Urgency | null {
+  if (a.kind !== 'fall' || a.handledAt) return null
+  const raised = new Date(a.raisedAt).getTime()
+  if (!movedSince(a, raised) && now - raised >= FALL_STILL_SEC * 1000) return 'critical'
+  return a.acknowledgedAt ? 'watch' : 'urgent'
+}
+
+function alertView(a: LocalAlert, now: number): AlertView {
+  const { id, residentId, kind, raisedAt, detail, handledAt, handledBy, acknowledgedAt, acknowledgedBy } = a
+  return {
+    id, residentId, kind, raisedAt, detail, handledAt, handledBy, acknowledgedAt, acknowledgedBy,
+    urgency: urgencyOf(a, now),
   }
 }
 
@@ -394,7 +431,16 @@ export function refreshSoon() {
 
 // ---------- persistence ----------
 
-interface LocalAlert extends AlertView {
+interface LocalAlert {
+  id: string
+  residentId: string
+  kind: AlertKind
+  raisedAt: string
+  detail: string
+  handledAt: string | null
+  handledBy: string | null
+  acknowledgedAt: string | null
+  acknowledgedBy: string | null
   source: Source
 }
 
@@ -502,7 +548,7 @@ export async function ingestReadings(list: DeviceReading[]) {
   return accepted
 }
 
-/** Who cleared an alert, in words the dashboard shows next to it */
+/** Who pressed "I'm OK", in words the dashboard shows next to the alert */
 function ackLabel(kind: 'ok' | 'nfc', tag: string | null) {
   if (kind === 'ok') return "I'm OK button"
   return tag ? `NFC tag ${tag.slice(-4)}` : 'NFC tag'
@@ -513,20 +559,23 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
   if (!residentId) return null
   const by = ackLabel(kind, tag)
   const newest = alerts
-    .filter((a) => a.residentId === residentId && !a.handledAt && a.source === currentSource())
+    .filter((a) => a.residentId === residentId && a.kind === 'fall' && !a.handledAt && a.source === currentSource())
     .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))[0]
   if (newest) {
-    newest.handledAt = iso(Date.now())
-    newest.handledBy = by
+    newest.acknowledgedAt = iso(Date.now())
+    newest.acknowledgedBy = by
     refreshSoon()
   }
-  return { residentId, alertId: newest?.id ?? null, handledBy: by }
+  return { residentId, alertId: newest?.id ?? null, acknowledgedBy: by }
 }
 
 export async function reportFall(deviceId: string, detail = 'Fall detected by the device') {
   const residentId = residentForDevice(deviceId)
   if (!residentId) return false
-  alerts.push({ id: randomUUID(), residentId, kind: 'fall', raisedAt: iso(Date.now()), detail, handledAt: null, handledBy: null, source: 'device' })
+  alerts.push({
+    id: randomUUID(), residentId, kind: 'fall', raisedAt: iso(Date.now()), detail,
+    handledAt: null, handledBy: null, acknowledgedAt: null, acknowledgedBy: null, source: 'device',
+  })
   refreshSoon()
   return true
 }
@@ -553,6 +602,8 @@ export async function simulateFall(residentId: string) {
     detail: 'Sudden drop, no movement since',
     handledAt: null,
     handledBy: null,
+    acknowledgedAt: null,
+    acknowledgedBy: null,
     source: 'simulated',
   })
   fallen.add(residentId)

@@ -21,6 +21,7 @@ const OFFLINE_AFTER_SEC = 120 // no reading for 2 min -> "no data"
 const LOW_BATTERY = 20
 const WEAK_RSSI = -80
 const REALERT_AFTER_MIN = 10 // after an alert is handled, wait this long before raising the same one again
+const FALL_STILL_SEC = 45 // a fall with no movement at all for this long is the top tier
 
 let state: State = { mode: 'simulated', updatedAt: null, slots: [], residents: [], alerts: [], error: null }
 export const getState = () => state
@@ -96,7 +97,8 @@ async function refresh() {
       { source },
     ),
     sql(
-      `SELECT alert_id, resident_id, kind, raised_at, detail, handled_at, handled_by FROM ${SCHEMA}.alerts
+      `SELECT alert_id, resident_id, kind, raised_at, detail, handled_at, handled_by,
+               acknowledged_at, acknowledged_by FROM ${SCHEMA}.alerts
        WHERE source = :source AND raised_at > current_timestamp() - INTERVAL 12 HOURS
        ORDER BY raised_at DESC`,
       { source },
@@ -111,6 +113,9 @@ async function refresh() {
     detail: String(a.detail ?? ''),
     handledAt: a.handled_at ? new Date(String(a.handled_at)).toISOString() : null,
     handledBy: str(a.handled_by),
+    acknowledgedAt: a.acknowledged_at ? new Date(String(a.acknowledged_at)).toISOString() : null,
+    acknowledgedBy: str(a.acknowledged_by),
+    urgency: null,
   }))
   const alertViews = applyAlertEdits(fromDb)
   // This read started after these clicks were saved, so it already includes them
@@ -172,6 +177,21 @@ async function refresh() {
       movement: movementBy.get(id) ?? slots.map(() => null),
     }
   })
+
+  // A fall stops counting as "no movement" once the resident moves again
+  const lastMovedAt = new Map<string, string>()
+  for (const r of residents) {
+    const id = String(r.resident_id)
+    const ts = str(r.last_moved)
+    if (ts) lastMovedAt.set(id, new Date(ts).toISOString())
+  }
+  for (const a of alertViews) {
+    if (a.kind !== 'fall' || a.handledAt) continue
+    const raised = new Date(a.raisedAt).getTime()
+    const moved = lastMovedAt.get(a.residentId)
+    const still = !moved || new Date(moved).getTime() <= raised
+    a.urgency = still && Date.now() - raised >= FALL_STILL_SEC * 1000 ? 'critical' : a.acknowledgedAt ? 'watch' : 'urgent'
+  }
 
   // Raise alerts for new problems (one open alert per resident and kind)
   const hasOpen = (rid: string, kind: AlertKind) => open.some((a) => a.residentId === rid && a.kind === kind)
@@ -265,6 +285,26 @@ function saveAlert(id: string, handledAt: string | null, by: string | null) {
         return await sql(
           `UPDATE ${SCHEMA}.alerts SET handled_at = ${handledAt ? `CAST(${lit(handledAt)} AS TIMESTAMP)` : 'NULL'},
              handled_by = ${handledAt ? ':by' : 'NULL'} WHERE alert_id = :id`,
+          { id, by },
+        )
+      } catch (e) {
+        if (attempt >= 4 || !/CONCURRENT|conflict/i.test((e as Error).message)) throw e
+        await new Promise((r) => setTimeout(r, 300 * attempt))
+      }
+    }
+  }
+  const next = alertWrites.then(write, write)
+  alertWrites = next.catch(() => {})
+  return next
+}
+
+function saveAck(id: string, at: string, by: string) {
+  const write = async () => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await sql(
+          `UPDATE ${SCHEMA}.alerts SET acknowledged_at = CAST(${lit(at)} AS TIMESTAMP), acknowledged_by = :by
+           WHERE alert_id = :id`,
           { id, by },
         )
       } catch (e) {
@@ -385,13 +425,26 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
   const by = ackLabel(kind, tag)
   const rows = await sql(
     `SELECT alert_id FROM ${SCHEMA}.alerts
-     WHERE resident_id = :resident AND handled_at IS NULL
+     WHERE resident_id = :resident AND kind = 'fall' AND handled_at IS NULL
      ORDER BY raised_at DESC LIMIT 1`,
     { resident: residentId },
   )
   const alertId = rows[0] ? String(rows[0].alert_id) : null
-  if (alertId) await handleAlert(alertId, true, by)
-  return { residentId, alertId, handledBy: by }
+  if (alertId) {
+    const at = new Date().toISOString()
+    // Show the downgrade straight away; only staff resolving it closes the alert
+    state = {
+      ...state,
+      alerts: state.alerts.map((a) =>
+        a.id === alertId
+          ? { ...a, acknowledgedAt: at, acknowledgedBy: by, urgency: a.urgency === 'critical' ? 'critical' : 'watch' }
+          : a,
+      ),
+    }
+    await saveAck(alertId, at, by)
+    refreshSoon()
+  }
+  return { residentId, alertId, acknowledgedBy: by }
 }
 
 /** Fast path: a device reported a fall. Raise the alert straight away. */
