@@ -4,7 +4,6 @@ import { byRoom, minutesAgo, secondsAgo, clock, LOW_BATTERY, type Resident } fro
 import { kindLabel } from '../data/alerts'
 import { BatteryText, Dot, RoomPlate, StatusMark } from '../components/board'
 import { MovementChart } from '../components/MovementChart'
-import { Wearable } from '../components/Wearable'
 import { useLive } from '../live'
 
 const signalLabel = { good: 'Good', fair: 'Fair', weak: 'Weak' }
@@ -51,7 +50,6 @@ function ResidentDetail({ r }: { r: Resident }) {
   const events = alerts.filter((a) => a.residentId === r.id)
   const d = r.device
   const lowBattery = (d?.battery ?? 100) < LOW_BATTERY
-  const light = r.status === 'fall' ? 'fall' : r.status === 'check' || lowBattery ? 'check' : 'accent'
   const labels = slots.map(clock)
 
   return (
@@ -105,10 +103,7 @@ function ResidentDetail({ r }: { r: Resident }) {
 
         <section className="rounded-xl border border-line bg-card p-5">
           <h2 className="text-base font-medium">Device</h2>
-          <div className="my-6 rounded-xl bg-deep py-6">
-            <Wearable deviceId={d?.id ?? 'No device'} light={light} size={88} />
-          </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-fg-2">Device</dt>
             <dd className="text-right font-mono tabular-nums">{d?.id ?? '–'}</dd>
             <dt className="text-fg-2">Firmware</dt>
