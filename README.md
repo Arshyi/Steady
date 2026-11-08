@@ -16,7 +16,7 @@ server, the Cloudflare Worker, and how to run the demo.
 | Fall detection | **Real**, runs on the board, verified with drops |
 | Readings to dashboard to alerts | **Real**, over USB serial (Web Serial) |
 | Pairing a device to a resident | **Real** |
-| Wi-Fi relay (`hardware/steady_unoq`) | **Written, never run on hardware**: the board's `wlan0` has never joined a network and the App Lab app is not installed |
+| Wi-Fi relay (`hardware/steady_unoq`) | **Written, never run on hardware.** The board joins Wi-Fi and takes a DHCP lease, but the campus guest portal intercepts its traffic and the App Lab app was never installed |
 | Heart rate, battery, signal | Dummy values from each resident's profile |
 | Other residents | Dummy `DEMO-<room>` stream so the wing looks awake |
 | Databricks storage | Implemented, selected by env vars; every run here used the local store |
@@ -269,12 +269,20 @@ python hardware/steady_unoq/tools/simulator.py --port 8765
 
 Then connect the dashboard over Wi-Fi to `127.0.0.1`.
 
-Status: this path is unproven on the board. `wlan0` exists and is not blocked,
-but it has never joined a network, `~/ArduinoApps` is empty, and none of this code
-has run on hardware; only the laptop simulator has. To try it, join Wi-Fi in the
-App Lab, install the app, and set `server_url` and `survey_url` to the laptop's
-LAN address. The defaults are `127.0.0.1`, which on the board means the board
-itself, so uploads would go nowhere apart from one log line per outage.
+Status: this path is unproven on the board. It does join a network and takes a
+DHCP lease, but a campus guest network sits behind a Cisco ISE captive portal:
+until the device accepts the policy in a browser, every request comes back as the
+portal's redirect page, so it has no internet and no reachable port. Scripting the
+acceptance does not work (the portal's Accept button is JavaScript, and posting
+the form only opens a fresh session). The App Lab app has also never been
+installed: `~/ArduinoApps` is empty and `arduino-app-cli app list` shows only the
+bundled examples.
+
+To try the relay for real, put the board and the dashboard on a network without a
+captive portal or client isolation (a phone hotspot is easiest), install the app
+from App Lab, and set `server_url` and `survey_url` to that server's LAN address.
+The defaults are `127.0.0.1`, which on the board means the board itself, so
+uploads would go nowhere apart from one log line per outage.
 
 **`firmware/steady/` — RTOS app with waveform capture.** A Zephyr build with a
 200 Hz sampler thread, a detector thread, an orientation filter, a per-fall
@@ -340,6 +348,7 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 | Gyro drifts slowly | The bias calibration ran while the board was moving. Reset it and leave it still for a second |
 | `Connect Arduino (USB)` is disabled | The browser has no Web Serial. Use Chrome or Edge on desktop |
 | Nothing reaches the dashboard | The data source must be **Live devices** and the device paired |
+| Board joins Wi-Fi but nothing connects | A captive portal or client isolation. `curl http://captive.apple.com/hotspot-detect.html` on the board returns the portal page; use a hotspot or a pre-shared-key network |
 
 ## Known limitations
 
@@ -354,7 +363,7 @@ firmware/steady/tools/run_host_test.sh          # detector host tests (no board)
 - **Databricks has not been exercised end to end** in this workspace; the local
   store has.
 - **One device per screen** over USB/Wi-Fi; a whole wing needs the relay path.
-- **The Wi-Fi path has never run on the board.** Only USB serial and the laptop simulator have been exercised.
+- **The Wi-Fi path has never run on the board.** It associates and gets a DHCP lease, but a captive portal currently blocks its traffic; only USB serial and the laptop simulator have been exercised.
 - `web/` echoes any CORS origin, and `DEVICE_TOKEN` is shared by all devices.
   Restrict the origin and move to per-device tokens before deploying.
 
