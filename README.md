@@ -1,2 +1,3 @@
 # Steady
-Steady helps nursing home night staff keep watch over every resident at once. Each resident wears a small device that tracks movement and detects falls, and Databricks turns that data into a single dashboard showing who’s up, who may need attention, and an instant alert when someone falls. Staff can respond faster.
+
+Steady helps nursing home night staff watch every resident at once. Each resident wears an Arduino UNO Q that tracks movement and detects falls, a small server stores the readings in Databricks, and a web dashboard shows who's asleep, who's up, who needs a check, and alerts staff the moment someone falls.
