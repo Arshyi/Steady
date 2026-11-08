@@ -9,6 +9,7 @@ import { connectWifi, connectSimulated, type Connection, type FallDetail, type T
 import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
+import { apiFetch, useAuth } from '../auth'
 
 const LATEST_FIRMWARE = '1.4.2'
 const TRACE_MS = 5000
@@ -194,7 +195,7 @@ function summarize(samples: MotionSample[]) {
 }
 
 function ConnectPanel() {
-  const { mode, residents, pair } = useLive()
+  const { mode, residents, allResidents, pair } = useLive()
   const [conn, setConn] = useState<Connection>()
   const [dev, setDev] = useState<LiveDevice>(emptyDevice)
   const [trace, setTrace] = useState<MotionSample[]>([])
@@ -445,7 +446,7 @@ function ConnectPanel() {
               className="h-10 min-w-0 flex-1 rounded-lg border border-line bg-raised px-3 text-sm text-fg"
             >
               <option value="">Choose a resident</option>
-              {[...residents].sort(byRoom).map((r) => (
+              {[...allResidents].sort(byRoom).map((r) => (
                 <option key={r.id} value={r.id}>
                   {r.room} · {r.name}
                 </option>
@@ -511,7 +512,7 @@ function DevicesSeen() {
     let timer: ReturnType<typeof setTimeout>
     const load = async () => {
       try {
-        const res = await fetch('/api/devices')
+        const res = await apiFetch('/api/devices')
         if (res.ok && !cancelled) setDevices((await res.json()) as SeenDevice[])
       } catch {
         // Backend offline: keep the last list and try again.
@@ -635,20 +636,29 @@ function DeviceTable() {
             )
           })}
         </ul>
+        {residents.length === 0 && (
+          <p className="px-4 py-4 text-sm text-fg-2">No wearables are paired yet. Connect one above and pair it to a resident.</p>
+        )}
       </div>
     </section>
   )
 }
 
 export function Settings() {
+  // Caretakers can connect and pair devices; the data source and demo fall are for admins
+  const { isAdmin } = useAuth()
   return (
     <Page>
       <header>
         <h1 className="text-3xl font-normal">Settings</h1>
-        <p className="mt-1 text-sm text-fg-2">Choose the data source, check the wearables are working, and pair them to residents</p>
+        <p className="mt-1 text-sm text-fg-2">
+          {isAdmin
+            ? 'Choose the data source, check the wearables are working, and pair them to residents'
+            : 'Check the wearables are working and pair them to residents'}
+        </p>
       </header>
       <div className="mt-8 flex flex-col gap-8">
-        <DataSource />
+        {isAdmin && <DataSource />}
         <ConnectPanel />
         <DevicesSeen />
         <DeviceTable />

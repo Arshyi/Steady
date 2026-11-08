@@ -1,5 +1,6 @@
 import { Link } from 'react-router'
 import { Logo } from '../components/Logo'
+import { useAuth, friendly } from '../auth'
 import { AlertRow, ResidentList } from '../components/board'
 import { sampleResidents, shift, byUrgency } from '../data/residents'
 import { sampleFall } from '../data/alerts'
@@ -11,11 +12,6 @@ const measures = [
   { title: 'Battery and signal', text: 'Every device reports its own health, so a flat or out-of-range device shows up before it’s missed.' },
 ]
 
-const steps = [
-  { title: 'The wearable', text: 'Each resident wears a Steady device that tracks movement, heart rate and falls.' },
-  { title: 'Databricks', text: 'Readings from every device in the wing are turned into a plain status per resident.' },
-  { title: 'The dashboard', text: 'Staff see the whole wing on one screen, with alerts for falls, checks and devices.' },
-]
 
 /** A picture of the dashboard. `inert` stops clicks, hovers and keyboard focus inside it. */
 function DashboardPreview() {
@@ -45,9 +41,40 @@ function DashboardPreview() {
   )
 }
 
+const primary =
+  'inline-flex h-11 items-center rounded-lg bg-fg px-5 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98]'
+const secondary =
+  'inline-flex h-11 items-center rounded-lg border border-line bg-raised px-5 text-sm font-medium text-fg transition-colors duration-150 hover:bg-card'
+
+/** "Staff log in", or straight to the dashboard when already signed in (or login is off) */
+function StaffLogin({ className, children }: { className: string; children: string }) {
+  const { enabled, signedIn, loading, login } = useAuth()
+  if (!enabled || signedIn)
+    return (
+      <Link to="/alerts" className={className}>
+        Open the dashboard
+      </Link>
+    )
+  return (
+    <button onClick={() => login('/alerts')} disabled={loading} className={className}>
+      {children}
+    </button>
+  )
+}
+
 export function Home() {
+  // Auth0 sends login errors back to this page
+  const { error } = useAuth()
   return (
     <div className="min-h-screen">
+      {error && (
+        <div role="alert" className="mx-auto max-w-[1280px] px-4 pt-4 sm:px-8">
+          <p className="rounded-xl border border-check/40 bg-card px-5 py-3 text-sm">
+            <span className="font-medium text-check">Couldn’t log you in.</span>{' '}
+            <span className="text-fg-2">{friendly(error)}</span>
+          </p>
+        </div>
+      )}
       <header className="mx-auto flex h-14 max-w-[1280px] items-center px-4 sm:px-8">
         <Logo />
       </header>
@@ -56,25 +83,18 @@ export function Home() {
       <section className="mx-auto grid min-h-[calc(100vh-56px)] max-w-[1280px] items-center gap-12 px-4 py-12 sm:px-8 lg:grid-cols-[5fr_7fr] lg:gap-16">
         <div>
           <h1 className="text-4xl leading-[1.08] font-normal tracking-[-0.02em] sm:text-5xl lg:text-[56px] lg:tracking-[-0.03em]">
-            A wearable for every resident, one dashboard for the night shift
+            Peace of mind, through every night
           </h1>
           <p className="mt-6 max-w-[36rem] text-lg leading-7 text-fg-2">
-            Steady devices track movement, heart rate and falls. The dashboard brings every device in the wing onto
-            one screen, so staff see who needs them and get an alert the moment someone falls.
+            Each resident wears a small Steady device that tracks movement, heart rate and falls. The dashboard puts
+            every resident in the wing on one screen, so the night shift sees who needs them and gets an alert the
+            moment someone falls.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <Link
-              to="/alerts"
-              className="inline-flex h-11 items-center rounded-lg bg-fg px-5 text-sm font-medium text-inverse transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98]"
-            >
-              Open the dashboard
+            <StaffLogin className={primary}>Staff log in</StaffLogin>
+            <Link to="/register" className={secondary}>
+              Register your care home
             </Link>
-            <a
-              href="#hardware"
-              className="inline-flex h-11 items-center rounded-lg border border-line bg-raised px-5 text-sm font-medium text-fg transition-colors duration-150 hover:bg-card"
-            >
-              See the hardware
-            </a>
           </div>
         </div>
         <DashboardPreview />
@@ -101,20 +121,6 @@ export function Home() {
             </dl>
           </div>
         </div>
-      </section>
-
-      {/* How it fits together */}
-      <section className="mx-auto max-w-[1280px] px-4 pb-24 sm:px-8">
-        <h2 className="text-2xl font-normal">How it fits together</h2>
-        <ol className="mt-8 grid gap-8 border-t border-line pt-8 md:grid-cols-3">
-          {steps.map((s, i) => (
-            <li key={s.title}>
-              <p className="font-mono text-xs tabular-nums text-fg-3">{i + 1}</p>
-              <h3 className="mt-2 text-base font-medium">{s.title}</h3>
-              <p className="mt-2 text-sm leading-5 text-fg-2">{s.text}</p>
-            </li>
-          ))}
-        </ol>
       </section>
 
       <footer className="mx-auto flex h-16 max-w-[1280px] items-center border-t border-line px-4 text-sm text-fg-3 sm:px-8">

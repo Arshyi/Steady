@@ -1,14 +1,16 @@
 import { useState } from 'react'
 import { NavLink, Link, Outlet, useLocation } from 'react-router'
-import { Bell, Users, Settings, Menu, X, Moon, Sun } from 'lucide-react'
+import { Bell, Users, Settings, Menu, X, Moon, Sun, LogOut, UserCog } from 'lucide-react'
 import { Logo } from './Logo'
 import { useTheme } from '../theme'
 import { useLive } from '../live'
+import { useAuth } from '../auth'
 
 const links = [
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/residents', label: 'Residents', icon: Users },
   { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/staff', label: 'Staff', icon: UserCog, admin: true },
 ]
 
 const rowClass = ({ isActive }: { isActive: boolean }) =>
@@ -20,11 +22,14 @@ const rowClass = ({ isActive }: { isActive: boolean }) =>
 
 function Nav({ onNavigate }: { onNavigate?: () => void }) {
   const { active } = useLive()
+  const { enabled, isAdmin } = useAuth()
   const hasFall = active.some((a) => a.kind === 'fall')
+  // Staff accounts only exist with login on, and only admins manage them
+  const shown = links.filter((l) => !l.admin || (enabled && isAdmin))
 
   return (
     <nav className="flex flex-col gap-0.5">
-      {links.map(({ to, label, icon: Icon }) => (
+      {shown.map(({ to, label, icon: Icon }) => (
         <NavLink key={to} to={to} className={rowClass} onClick={onNavigate}>
           <Icon className="h-4 w-4 shrink-0 text-fg-3" strokeWidth={1.5} />
           <span className="flex-1">{label}</span>
@@ -47,6 +52,42 @@ function ThemeToggle() {
       <Icon className="h-4 w-4 shrink-0 text-fg-3" strokeWidth={1.5} />
       {dark ? 'Light mode' : 'Dark mode'}
     </button>
+  )
+}
+
+/** Who is signed in, and the way out. Hidden when login is turned off. */
+function Account() {
+  const { enabled, me, logout } = useAuth()
+  if (!enabled || !me) return null
+  const name = me.name ?? me.email ?? 'Signed in'
+  const initials = name
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join('')
+  const role = me.role === 'admin' ? 'Administrator' : 'Caretaker'
+  return (
+    <div className="mb-1 flex items-center gap-2.5 rounded-lg border border-line bg-card px-2.5 py-2">
+      <span
+        aria-hidden
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-raised text-xs font-medium text-fg-2"
+      >
+        {initials}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-fg">{name}</p>
+        <p className="truncate text-xs text-fg-3">{me.careHomeName ? `${role} · ${me.careHomeName}` : role}</p>
+      </div>
+      <button
+        onClick={logout}
+        aria-label="Log out"
+        title="Log out"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-fg-3 transition-colors duration-150 hover:bg-raised hover:text-fg"
+      >
+        <LogOut className="h-4 w-4" strokeWidth={1.5} />
+      </button>
+    </div>
   )
 }
 
@@ -87,7 +128,8 @@ export function AppShell() {
         <div className="mt-4">
           <Nav />
         </div>
-        <div className="mt-auto pb-4">
+        <div className="mt-auto flex flex-col gap-0.5 pb-4">
+          <Account />
           <ThemeToggle />
         </div>
       </aside>
@@ -110,6 +152,7 @@ export function AppShell() {
           <div className="flex flex-col gap-2 pb-4">
             <Nav onNavigate={() => setOpen(false)} />
             <ThemeToggle />
+            <Account />
           </div>
         )}
       </div>

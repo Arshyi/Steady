@@ -11,6 +11,19 @@
 //   POST /api/acks                  { deviceId, kind, tag? }  the wearable's I'm OK / NFC tap
 //   POST /api/simulate/fall         { residentId }  demo: make a simulated resident fall
 //
+//   GET  /api/accounts              public: is login / registering turned on
+//   POST /api/register              public: { careHome, name, email } makes a care home and its admin
+//   GET  /api/me                    the signed-in staff member
+//   GET  /api/staff                 admin: everyone in the care home
+//   POST /api/staff                 admin: { email, name?, role? } invite someone
+//   PATCH /api/staff/:id            admin: { role }
+//   DELETE /api/staff/:id           admin
+//   POST /api/staff/:id/resend      admin: email the set-password link again
+//
+// Staff routes need an Auth0 login when it's turned on (see auth.ts). Changing the data source
+// and the demo fall are admin only. Device routes (readings, falls, acks, ingest) don't use
+// staff logins; the firmware has its own token.
+//
 //   GET  /api/v1/health             liveness; says which store is in use
 //   POST /api/v1/ingest             the firmware's batched uplink (bearer token)
 //
@@ -22,6 +35,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { configured } from './databricks.ts'
 import { touchDevice } from './devices.ts'
 import type { Backend, DeviceReading } from './types.ts'
+import {
+  HttpError, authEnabled, accountsEnabled, currentStaff, requireAdmin, registerCareHome,
+  listStaff, inviteStaff, setRole, removeStaff, resendInvite,
+} from './auth.ts'
 
 const PORT = Number(process.env.PORT) || 8787
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN ?? ''
@@ -138,9 +155,47 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost')
   const path = url.pathname
   try {
-    if (req.method === 'GET' && path === '/api/state') return send(res, 200, backend.getState())
+    // ---------- accounts ----------
 
-    if (req.method === 'GET' && path === '/api/devices') return send(res, 200, backend.listDevices())
+    if (req.method === 'GET' && path === '/api/accounts') return send(res, 200, { login: authEnabled, register: accountsEnabled })
+
+    if (req.method === 'POST' && path === '/api/register') return send(res, 200, await registerCareHome(req, await readJson(req)))
+
+    if (req.method === 'GET' && path === '/api/me') {
+      const me = await currentStaff(req)
+      // With login off, everyone can do everything
+      return send(res, 200, me ?? { id: null, name: null, email: null, role: 'admin', careHome: null, careHomeName: null, joined: true })
+    }
+
+    if (path === '/api/staff' || path.startsWith('/api/staff/')) {
+      const me = await requireAdmin(req)
+      if (!me) return send(res, 409, { error: 'Staff accounts need Auth0 login turned on' })
+      const [, , , id, action] = path.split('/').map(decodeURIComponent)
+      if (req.method === 'GET' && !id) return send(res, 200, await listStaff(me))
+      if (req.method === 'POST' && !id) return send(res, 200, await inviteStaff(me, await readJson(req)))
+      if (req.method === 'PATCH' && id && !action) return send(res, 200, await setRole(me, id, await readJson(req)))
+      if (req.method === 'DELETE' && id && !action) {
+        await removeStaff(me, id)
+        return send(res, 200, { ok: true })
+      }
+      if (req.method === 'POST' && id && action === 'resend') {
+        await resendInvite(me, id)
+        return send(res, 200, { ok: true })
+      }
+      return send(res, 404, { error: 'Not found' })
+    }
+
+    // ---------- dashboard ----------
+
+    if (req.method === 'GET' && path === '/api/state') {
+      await currentStaff(req)
+      return send(res, 200, backend.getState())
+    }
+
+    if (req.method === 'GET' && path === '/api/devices') {
+      await currentStaff(req)
+      return send(res, 200, backend.listDevices())
+    }
 
     if (req.method === 'GET' && path === '/api/v1/health') {
       const state = backend.getState()
@@ -172,6 +227,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/api/mode') {
+      await requireAdmin(req)
       const { mode } = await readJson(req)
       if (mode !== 'simulated' && mode !== 'device') return send(res, 400, { error: 'mode must be simulated or device' })
       await backend.setMode(mode)
@@ -180,12 +236,16 @@ const server = createServer(async (req, res) => {
 
     const alertMatch = path.match(/^\/api\/alerts\/([\w-]+)\/(handle|undo)$/)
     if (req.method === 'POST' && alertMatch) {
+      const me = await currentStaff(req)
       const { by } = await readJson(req)
-      await backend.handleAlert(alertMatch[1], alertMatch[2] === 'handle', by ? String(by) : null)
+      // Signed in: record who it was. Login off: take the name the page sends, if any.
+      const who = me ? me.name : by ? String(by) : null
+      await backend.handleAlert(alertMatch[1], alertMatch[2] === 'handle', who)
       return send(res, 200, { ok: true })
     }
 
     if (req.method === 'POST' && path === '/api/pairings') {
+      await currentStaff(req)
       const { residentId, deviceId, firmware } = await readJson(req)
       if (!residentId || !deviceId) return send(res, 400, { error: 'residentId and deviceId are required' })
       await backend.pairDevice(String(residentId), String(deviceId), firmware ? String(firmware) : null)
@@ -228,6 +288,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/api/simulate/fall') {
+      await requireAdmin(req)
       if (backend.getState().mode !== 'simulated') return send(res, 409, { error: 'Switch to simulated data first' })
       const { residentId } = await readJson(req)
       await backend.simulateFall(String(residentId))
@@ -237,6 +298,7 @@ const server = createServer(async (req, res) => {
 
     send(res, 404, { error: 'Not found' })
   } catch (e) {
+    if (e instanceof HttpError) return send(res, e.status, { error: e.message })
     console.error(`[${req.method} ${path}]`, (e as Error).message)
     send(res, 500, { error: (e as Error).message })
   }

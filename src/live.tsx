@@ -4,6 +4,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Resident } from './data/residents'
 import type { Alert } from './data/alerts'
+import { api, apiFetch, useAuth } from './auth'
 
 export type DataMode = 'simulated' | 'device'
 
@@ -22,6 +23,8 @@ interface Live extends ApiState {
   /** Set when the backend itself can't be reached */
   offline: string | null
   active: Alert[]
+  /** Every resident, including ones hidden in live mode. Only for choosing who to pair a wearable to. */
+  allResidents: Resident[]
   findResident: (id: string) => Resident | undefined
   handle: (alertId: string) => Promise<void>
   undo: (alertId: string) => Promise<void>
@@ -34,15 +37,7 @@ const POLL_MS = 3000
 const empty: ApiState = { mode: 'simulated', updatedAt: null, slots: [], residents: [], alerts: [], error: null }
 const LiveContext = createContext<Live | null>(null)
 
-export async function post(path: string, body?: unknown) {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Request failed (${res.status})`)
-  return res.json()
-}
+export const post = (path: string, body?: unknown) => api<any>(path, 'POST', body ?? {})
 
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<ApiState>(empty)
@@ -72,22 +67,30 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const load = useCallback(async () => {
     clearTimeout(timer.current)
     try {
-      const res = await fetch('/api/state')
-      if (!res.ok) throw new Error(`Backend returned ${res.status}`)
-      const next: ApiState = await res.json()
-      setData(withPending(next))
-      setOffline(null)
-      if (next.updatedAt) setLoaded(true)
+      const res = await apiFetch('/api/state')
+      if (res.status === 401 || res.status === 403) {
+        setOffline((await res.json().catch(() => ({}))).error ?? 'Please log in again')
+      } else {
+        if (!res.ok) throw new Error(`Backend returned ${res.status}`)
+        const next: ApiState = await res.json()
+        setData(withPending(next))
+        setOffline(null)
+        if (next.updatedAt) setLoaded(true)
+      }
     } catch {
       setOffline('Can’t reach the Steady server. Is `npm run dev` running?')
     }
     timer.current = setTimeout(load, POLL_MS)
   }, [])
 
+  // Only poll once someone is signed in (always, when login is off)
+  const auth = useAuth()
+  const ready = auth.signedIn && !auth.loading && !auth.error
   useEffect(() => {
+    if (!ready) return
     load()
     return () => clearTimeout(timer.current)
-  }, [load])
+  }, [load, ready])
 
   // Show a change straight away, then confirm with the server
   const setAlert = async (id: string, handled: boolean) => {
@@ -105,8 +108,13 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     load()
   }
 
+  // Live mode only shows residents wearing a paired device; the rest are demo residents
+  const residents = data.mode === 'device' ? data.residents.filter((r) => r.device) : data.residents
+
   const value: Live = {
     ...data,
+    residents,
+    allResidents: data.residents,
     loading: !loaded,
     offline,
     active: data.alerts.filter((a) => !a.handledAt),

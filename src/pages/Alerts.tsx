@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { AlertRow } from '../components/board'
 import { Page, PageHeader } from '../components/PageHeader'
 import { useLive } from '../live'
@@ -7,8 +8,18 @@ import { countByStatus, LOW_BATTERY } from '../data/residents'
 
 /** One-line counts for the whole wing: residents first, then devices */
 function WingSummary() {
-  const { residents } = useLive()
+  const { residents, mode } = useLive()
   const c = countByStatus(residents)
+  if (mode === 'device' && residents.length === 0)
+    return (
+      <p className="mt-4 text-sm text-fg-2">
+        No wearables are paired yet.{' '}
+        <Link to="/settings" className="text-fg underline underline-offset-2">
+          Pair one in Settings
+        </Link>{' '}
+        to see its resident here.
+      </p>
+    )
   const online = residents.filter((r) => r.device?.lastSyncSec != null && r.device.lastSyncSec < 120).length
   const lowBattery = residents.filter((r) => (r.device?.battery ?? 100) < LOW_BATTERY).length
   const weakSignal = residents.filter((r) => r.device?.signal === 'weak').length
