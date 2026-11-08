@@ -5,7 +5,7 @@ import { RoomPlate, BatteryText, Dot } from '../components/board'
 import { LiveTrace } from '../components/LiveTrace'
 import { SurveyPanel } from '../components/SurveyPanel'
 import { byRoom, secondsAgo, shift, LOW_BATTERY, type Resident } from '../data/residents'
-import { connectWifi, connectSimulated, type Connection, type Transport } from '../hardware/connection'
+import { connectWifi, connectSimulated, type Connection, type FallDetail, type Transport } from '../hardware/connection'
 import { connectSerial, serialSupported } from '../hardware/serial'
 import type { MotionSample } from '../hardware/protocol'
 import { useLive, post, type DataMode } from '../live'
@@ -260,11 +260,16 @@ function ConnectPanel() {
         const moved = Math.hypot(s.gx, s.gy, s.gz) > 30
         update({ sample: s, gyroMoved: devRef.current.gyroMoved || moved })
       },
-      onFall: () => {
+      onFall: (detail?: FallDetail) => {
         update({ fallSeen: true })
-        // Fast path: falls go straight to the server
+        // Fast path: falls go straight to the server, with what the board measured
         if (forwardRef.current && modeRef.current === 'device' && devRef.current.id)
-          post('/api/falls', { deviceId: devRef.current.id }).catch(() => {})
+          post('/api/falls', { deviceId: devRef.current.id, detail }).catch(() => {})
+        const measured = [
+          detail?.peakG !== undefined ? `peak ${detail.peakG.toFixed(1)} g` : null,
+          detail?.tiltDelta !== undefined ? `tilt ${Math.round(detail.tiltDelta)}°` : null,
+        ].filter(Boolean)
+        setLastEvent(measured.length ? `Fall detected · ${measured.join(', ')}` : 'Fall detected')
       },
       onOk: () => setLastEvent(`"I'm OK" pressed at ${stamp()}`),
       onTap: (tag: string) => setLastEvent(`NFC tap ${tag.slice(-4)} at ${stamp()}`),

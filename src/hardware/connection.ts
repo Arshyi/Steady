@@ -19,11 +19,18 @@ export interface KnownLocation {
   confidence?: number
 }
 
+/** What the board measured when it fired a fall */
+export interface FallDetail {
+  peakG?: number
+  tiltDelta?: number
+  confidence?: number
+}
+
 export interface DeviceEvents {
   onInfo: (id: string, firmware: string) => void
   onBattery: (percent: number) => void
   onMotion: (sample: MotionSample) => void
-  onFall: () => void
+  onFall: (detail?: FallDetail) => void
   onDisconnect: () => void
   /** The wearer pressed the button once: "I'm OK". */
   onOk?: () => void
@@ -56,9 +63,15 @@ export function handleLine(line: string, ev: DeviceEvents) {
       if ([ax, ay, az, gx, gy, gz].every(Number.isFinite)) ev.onMotion({ t: performance.now(), ax, ay, az, gx, gy, gz })
       break
     }
-    case 'F':
-      ev.onFall()
+    case 'F': {
+      const [peak, tilt, confidence] = parts.slice(1).map(Number)
+      ev.onFall({
+        peakG: Number.isFinite(peak) ? peak : undefined,
+        tiltDelta: Number.isFinite(tilt) ? tilt : undefined,
+        confidence: Number.isFinite(confidence) ? confidence : undefined,
+      })
       break
+    }
     case 'O':
       ev.onOk?.()
       break

@@ -7,7 +7,7 @@ generated waveform.
 ## Wiring
 
 ```
-MPU6050 breakout     Arduino UNO
+MPU6050 breakout     Arduino UNO / UNO Q
   VCC   ────────────  5V        (the module has its own 3.3 V regulator)
   GND   ────────────  GND
   SDA   ────────────  A4
@@ -18,15 +18,23 @@ MPU6050 breakout     Arduino UNO
 `XDA`, `XCL` and `INT` are unused. No library is needed: the sketch talks to the
 MPU6050's registers over `Wire` directly.
 
+On the **UNO Q**, the pins labelled SDA/SCL are D20/D21 (plain `Wire`) and A4/A5
+are a second bus (`Wire2`). The sketch probes both and uses whichever answers at
+0x68, so either wiring works. Power the module from **3V3** there rather than 5V:
+the header's I2C lines are 3.3 V and most breakouts pull SDA/SCL up to VCC.
+Select **Arduino UNO Q** as the board — that core needs the `Arduino_RouterBridge`
+library from the Library Manager, and `Serial` reaches the same COM port through
+the board's Linux side.
+
 ## Upload
 
 1. Open `arduino/steady_mpu6050/steady_mpu6050.ino` in the Arduino IDE.
-2. Select **Arduino UNO** and the port, then upload.
+2. Select **Arduino UNO** (or **Arduino UNO Q**) and the port, then upload.
 3. Open the Serial Monitor at **115200 baud**. You should see:
 
    ```
    # gyro bias (raw) 12.0 -4.0 7.0
-   I,UNO-MPU1,1.1.0
+   I,UNO-MPU1,1.2.0
    M,0.021,-0.004,1.003,0.4,-0.2,0.1
    ```
 
@@ -49,14 +57,41 @@ npm run dev          # dashboard + server
 
 1. Open the dashboard's **Settings** screen.
 2. Choose **Live devices** as the data source.
-3. Click **Connect Arduino (USB)** and pick the UNO's port
+3. Click **Connect Arduino (USB)** and pick the board's port (on the UNO Q it
+   appears as `USB Serial Device (COM4)`).
    (Chrome or Edge — Web Serial is not in Safari or Firefox).
-4. The panel should show `UNO-MPU1`, 20 samples/s, with **Accelerometer reads
+4. The panel should show `UNO-MPU1`, about 40 samples/s (the sketch asks for 50; the
+   board's serial bridge adds a few milliseconds per line), with **Accelerometer reads
    gravity** and (once you turn the board) **Gyroscope responds** ticked.
 5. Pick a resident and press **Pair**. The browser then sends a one-second
    summary to the server, so the resident's room follows the real sensor.
 
 Turn, tilt and tap the board to see the trace, movement score and status change.
+
+## Fall detection
+
+The board decides for itself whether a drop was a fall. Three things have to
+happen in order within about a second: the sensor goes weightless (`|a|` under
+0.60 g) and then takes a hard impact (over 1.8 g). A real fall usually ends with
+the body lying at least 40° from the way it was held, which raises confidence and
+is reported as the posture change; a landing harder than 3 g counts on its own,
+so a board dropped flat still raises an alert.
+
+On a fall it prints one line, which the dashboard turns into the alert text:
+
+```
+F,6.0,82,88        peak g, posture change in degrees, confidence
+```
+
+The sensor is read at 200 Hz for detection and printed at about 40 Hz, because a
+landing spike lasts only a few tens of milliseconds and the serial link cannot see
+that often. `# weightless` and `# impact … g` lines appear in the Serial Monitor
+while tuning.
+
+`FALL_COOLDOWN_MS` stops a single drop from firing again and again. The
+thresholds are where tuning starts, not where it ends: test with deliberate
+drops onto a mat before showing anyone a fall alert, and note that a fall only
+reaches the dashboard when the device is paired to a resident.
 
 ## What is real and what is not
 
@@ -67,7 +102,7 @@ Turn, tilt and tap the board to see the trace, movement score and status change.
 | Movement score and trace | **Real**, computed from those sensors |
 | Heart rate, battery, signal | Dummy values from each resident's profile |
 | Other residents | Dummy readings so the wing still looks populated |
-| Fall detection | Dummy (simulated `events`, not this sketch) |
+| Fall detection | **Real**, threshold on the board (free fall → impact → posture change) |
 
 The dummy fill is the server's `DEMO_FILL` setting, on by default in the local
 store. Turn it off with `DEMO_FILL=0 npm run dev` if you want device mode to show
@@ -80,6 +115,8 @@ board.
 
 - **`# MPU6050 not found at 0x68`** — check VCC/GND and that SDA is on A4 and SCL
   on A5. Some clones need a moment after power-up; the sketch retries every 5 s.
+  On the UNO Q this means it did not answer on either header bus (SDA/SCL or
+  A4/A5); both empty points at power, swapped SDA/SCL, or a loose jumper.
 - **Gyro drifts slowly** — the bias calibration ran while the board was moving.
   Reset it and leave it still for a second.
 - **No port in the picker** — another program (Serial Monitor, Arduino IDE) may

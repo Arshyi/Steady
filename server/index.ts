@@ -201,8 +201,17 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && path === '/api/falls') {
-      const { deviceId } = await readJson(req)
-      const ok = await backend.reportFall(String(deviceId))
+      const { deviceId, detail } = await readJson(req)
+      const bits: string[] = []
+      if (detail && typeof detail === 'object') {
+        const d = detail as Record<string, unknown>
+        const peak = Number(d.peakG)
+        const tilt = Number(d.tiltDelta)
+        if (Number.isFinite(peak) && peak > 0) bits.push(`peak ${peak.toFixed(1)} g`)
+        if (Number.isFinite(tilt) && Math.abs(tilt) >= 1) bits.push(`posture change ${Math.round(tilt)}°`)
+      }
+      const measured = bits.length ? `Fall detected by the device: ${bits.join(', ')}` : undefined
+      const ok = await backend.reportFall(String(deviceId), measured)
       return send(res, ok ? 200 : 409, ok ? { ok } : { error: 'Device is not paired to a resident' })
     }
 
