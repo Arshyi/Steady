@@ -99,4 +99,5 @@ export interface Backend {
   listDevices(): DeviceInfo[]
   refreshSoon(): void
   simulateFall(residentId: string): Promise<void>
+  addResident(name: string, room: string | null): Promise<{ id: string; name: string; room: string }>
 }

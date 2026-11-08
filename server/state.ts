@@ -1,6 +1,7 @@
 // Reads Databricks every few seconds, works out each resident's status, raises alerts,
 // and keeps the result in memory so the web app can poll it cheaply.
 
+import { randomUUID } from 'node:crypto'
 import { sql, lit, SCHEMA, type Row } from './databricks.ts'
 import { loadMode, saveMode, insertAlerts, setupSchema } from './schema.ts'
 import { startSimulator, stopSimulator, setFallen, backfillIfNeeded, simulateFall } from './simulator.ts'
@@ -431,20 +432,19 @@ export async function acknowledgeDevice(deviceId: string, kind: 'ok' | 'nfc', ta
   )
   const alertId = rows[0] ? String(rows[0].alert_id) : null
   if (alertId) {
-    const at = new Date().toISOString()
-    // Show the downgrade straight away; only staff resolving it closes the alert
-    state = {
-      ...state,
-      alerts: state.alerts.map((a) =>
-        a.id === alertId
-          ? { ...a, acknowledgedAt: at, acknowledgedBy: by, urgency: a.urgency === 'critical' ? 'critical' : 'watch' }
-          : a,
-      ),
-    }
-    await saveAck(alertId, at, by)
-    refreshSoon()
+    // The wearer saying they're OK resolves the fall: it moves to Handled, "via I'm OK button"
+    await saveAck(alertId, new Date().toISOString(), by)
+    await handleAlert(alertId, true, by)
   }
   return { residentId, alertId, acknowledgedBy: by }
+}
+
+/** A resident added from Settings, to pair a real wearable to. No simulated device. */
+export async function addResident(name: string, room: string | null) {
+  const id = `r-${randomUUID().slice(0, 8)}`
+  await sql(`INSERT INTO ${SCHEMA}.residents VALUES (:id, :name, :room, NULL)`, { id, name, room: room ?? '' })
+  refreshSoon()
+  return { id, name, room: room ?? '' }
 }
 
 /** Fast path: a device reported a fall. Raise the alert straight away. */

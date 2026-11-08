@@ -106,8 +106,6 @@ function ResidentDetail({ r }: { r: Resident }) {
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
             <dt className="text-fg-2">Device</dt>
             <dd className="text-right font-mono tabular-nums">{d?.id ?? '–'}</dd>
-            <dt className="text-fg-2">Firmware</dt>
-            <dd className="text-right font-mono tabular-nums">{d?.firmware ?? '–'}</dd>
             <dt className="text-fg-2">Battery</dt>
             <dd className="text-right">
               <BatteryText value={d?.battery} />

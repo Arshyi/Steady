@@ -29,6 +29,8 @@ interface Live extends ApiState {
   handle: (alertId: string) => Promise<void>
   undo: (alertId: string) => Promise<void>
   pair: (residentId: string, deviceId: string, firmware?: string) => Promise<void>
+  /** Add a resident to pair a real wearable to; returns their id */
+  addResident: (name: string, room: string) => Promise<string>
   setMode: (mode: DataMode) => Promise<void>
   simulateFall: (residentId: string) => Promise<void>
 }
@@ -108,8 +110,9 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     load()
   }
 
-  // Live mode only shows residents wearing a paired device; the rest are demo residents
-  const residents = data.mode === 'device' ? data.residents.filter((r) => r.device) : data.residents
+  // Only residents wearing a device show: in live mode that means a paired wearable, and
+  // residents added for real wearables never show in simulated mode
+  const residents = data.residents.filter((r) => r.device)
 
   const value: Live = {
     ...data,
@@ -121,6 +124,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     findResident: (id) => data.residents.find((r) => r.id === id),
     handle: (id) => setAlert(id, true),
     undo: (id) => setAlert(id, false),
+    addResident: async (name, room) => {
+      const { id } = await post('/api/residents', { name, room })
+      load()
+      return id as string
+    },
     pair: async (residentId, deviceId, firmware) => {
       await post('/api/pairings', { residentId, deviceId, firmware })
       load()

@@ -5,6 +5,7 @@
 //   POST /api/mode                  { mode: 'simulated' | 'device' }
 //   POST /api/alerts/:id/handle     acknowledge or mark done
 //   POST /api/alerts/:id/undo
+//   POST /api/residents             { name, room? } add a resident to pair a wearable to
 //   POST /api/pairings              { residentId, deviceId, firmware? }
 //   POST /api/readings              [{ deviceId, movement, gyroDps, accelG, battery, ... }]  from devices or the relay
 //   POST /api/falls                 { deviceId }  fast path for a fall
@@ -242,6 +243,15 @@ const server = createServer(async (req, res) => {
       const who = me ? me.name : by ? String(by) : null
       await backend.handleAlert(alertMatch[1], alertMatch[2] === 'handle', who)
       return send(res, 200, { ok: true })
+    }
+
+    if (req.method === 'POST' && path === '/api/residents') {
+      await currentStaff(req)
+      const { name, room } = await readJson(req)
+      const cleanName = String(name ?? '').trim().slice(0, 80)
+      if (!cleanName) return send(res, 400, { error: 'Enter the resident’s name' })
+      const cleanRoom = String(room ?? '').trim().slice(0, 12) || null
+      return send(res, 200, await backend.addResident(cleanName, cleanRoom))
     }
 
     if (req.method === 'POST' && path === '/api/pairings') {

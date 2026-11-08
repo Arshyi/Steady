@@ -145,25 +145,25 @@ the old D2-to-GND wiring, because D4 idling low changes nothing.
 
 | Gesture | Result |
 | --- | --- |
-| One press | "I'm OK": the fall drops to the lowest urgency and still needs a visit |
+| One press | "I'm OK": resolves the resident's open fall ("handled via I'm OK button") |
 | Three presses within 2.5 s | Survey mode: the Linux side scans Wi-Fi |
 | Two presses | Ignored as a fumbled double tap |
 
 ### How a fall is triaged
 
-A fall stays on the Alerts page until a member of staff marks it checked. Pressing
-"I'm OK" never closes it: it only moves the fall down the list.
+A fall stays on the Alerts page until it is resolved: a member of staff clicks **Mark
+checked**, or the wearer presses "I'm OK". A press moves the fall to *Handled
+tonight* as "via I'm OK button", and staff can **Undo** it to reopen the fall.
+
+While a fall is open it is ranked:
 
 | Urgency | What happened | Badge on the row |
 | --- | --- | --- |
 | Highest | Fell, and nothing has moved since | No movement since the fall |
-| Middle | Fell, and no "I'm OK" press | Not acknowledged yet |
-| Lowest | Fell, and the wearer pressed "I'm OK" | Says they’re OK |
+| Middle | Fell, still waiting for a response | Not acknowledged yet |
 
-The highest tier wins even after a press: lying still matters more than pressing a
-button. Movement has to come from the device itself, so the demo fill cannot clear
-it. **Mark checked**, pressed by staff on the dashboard, is the only thing that
-removes a fall from the queue.
+Movement has to come from the device itself, so the demo fill cannot clear the
+highest tier.
 
 A gesture is decided after 650 ms with no further press, so a single press reports
 shortly after you release rather than instantly. Presses are debounced for 25 ms.
@@ -353,8 +353,8 @@ does not isolate a user's own devices), the app is installed at
 at ~48 Hz; `server_url` is set to the laptop's LAN address, so summaries reach
 `server/`; and the Settings page connects over Wi-Fi and shows live accelerometer
 and gyroscope values. The button has been pressed on the real board: one press posts
-an "I'm OK" ack (the server records `acknowledgedBy`) that only lowers the fall's
-urgency, and three presses fire the survey gesture.
+an "I'm OK" ack, which now resolves the resident's open fall, and three presses fire
+the survey gesture.
 
 Set the server address before installing: copy `python/config.example.json` to
 `python/config.json` (git-ignored, so each laptop keeps its own) and set
