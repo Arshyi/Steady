@@ -1,7 +1,6 @@
 import { Link } from 'react-router'
 import { Logo } from '../components/Logo'
 import { AlertRow, ResidentList } from '../components/board'
-import { Wearable } from '../components/Wearable'
 import { sampleResidents, shift, byUrgency } from '../data/residents'
 import { sampleFall } from '../data/alerts'
 
@@ -49,11 +48,8 @@ function DashboardPreview() {
 export function Home() {
   return (
     <div className="min-h-screen">
-      <header className="mx-auto flex h-14 max-w-[1280px] items-center justify-between px-4 sm:px-8">
+      <header className="mx-auto flex h-14 max-w-[1280px] items-center px-4 sm:px-8">
         <Logo />
-        <Link to="/overview" className="text-sm text-fg-2 transition-colors duration-150 hover:text-fg">
-          Open the dashboard
-        </Link>
       </header>
 
       {/* Hero */}
@@ -86,17 +82,16 @@ export function Home() {
 
       {/* Hardware */}
       <section id="hardware" className="mx-auto max-w-[1280px] px-4 pt-12 pb-24 sm:px-8">
-        <div className="grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
-          <div className="flex items-center justify-center rounded-[20px] border border-line bg-deep py-16">
-            <Wearable deviceId="ST-0419" size={160} />
-          </div>
+        <div className="grid gap-12 lg:grid-cols-2 lg:gap-16">
           <div>
             <h2 className="text-3xl font-normal">The hardware</h2>
             <p className="mt-4 max-w-[36rem] text-base leading-6 text-fg-2">
               A small device worn by each resident. It measures through the night and reports to the dashboard
               every few seconds.
             </p>
-            <dl className="mt-8 border-t border-line">
+          </div>
+          <div>
+            <dl className="border-t border-line">
               {measures.map((m) => (
                 <div key={m.title} className="grid gap-1 border-b border-line py-4 sm:grid-cols-[176px_1fr] sm:gap-4">
                   <dt className="text-sm font-medium">{m.title}</dt>
